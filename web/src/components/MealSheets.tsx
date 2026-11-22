@@ -1,8 +1,8 @@
 import { Trash2 } from 'lucide-react';
 import { useState } from 'react';
-import { makeMealLog, scaleT, uid, roundT } from '../lib/engine';
+import { makeMealLog, mealWithCuts, roundT, scaleT, uid } from '../lib/engine';
 import { fmtInt } from '../lib/format';
-import { itemLabel, itemTotals, mealTotals, type Meal } from '../lib/plan';
+import { itemLabel, itemTotals, mealTotals, type Meal, type Plan, type ReductionStep } from '../lib/plan';
 import { useStore } from '../lib/store';
 import type { LogItem, MealLog, MealStatus } from '../lib/types';
 import { FoodPicker } from './FoodPicker';
@@ -26,15 +26,20 @@ export const STATUS_CHIP: Record<MealStatus, string> = {
 
 export function MealLogSheet({
   date,
+  plan,
   meal,
   log,
   initial,
+  cuts = [],
   onClose,
 }: {
   date: string;
+  plan: Plan;
   meal: Meal;
   log?: MealLog;
   initial?: MealStatus;
+  /** Cortes do dia (compensação ou meta abaixo do cardápio): "Segui" registra o prato reduzido. */
+  cuts?: ReductionStep[];
   onClose: () => void;
 }) {
   const { saveDay, toast } = useStore();
@@ -42,10 +47,13 @@ export function MealLogSheet({
   const [items, setItems] = useState<LogItem[]>(log?.items ?? []);
   const [fraction, setFraction] = useState<number>(log?.fraction ?? 0.5);
   const [note, setNote] = useState(log?.note ?? '');
-  const [picker, setPicker] = useState(false);
-  const planned = mealTotals(meal);
-  const preview = makeMealLog(meal, status, { items, fraction, note });
-  const delta = preview.kcal - planned.kcal;
+  const [picker, setPicker] = useState(initial === 'swapped' && !log?.items?.length);
+  const mine = cuts.filter((c) => c.meal === meal.id);
+  const planned = mealTotals(plan, meal);
+  const plate = mealWithCuts(meal, mine);
+  const plateTotals = mealTotals(plan, plate);
+  const preview = makeMealLog(plan, meal, status, { items, fraction, note, cuts: mine });
+  const delta = Math.round(preview.kcal) - Math.round(planned.kcal);
 
   const save = async () => {
     const ok = await saveDay(date, (d) => {
@@ -69,7 +77,7 @@ export function MealLogSheet({
 
   const addGeneric = (kcal: number) => setItems([...items, { name: `Extra (+${kcal} kcal)`, kcal, p: 0, c: 0, f: 0 }]);
   const addHalf = () => {
-    const t = roundT(scaleT(planned, 0.5));
+    const t = roundT(scaleT(plateTotals, 0.5));
     setItems([...items, { name: 'Meia porção extra do prato', ...t }]);
   };
 
@@ -78,18 +86,25 @@ export function MealLogSheet({
       <div className="stack">
         <div className="card" style={{ padding: 12 }}>
           <div className="label" style={{ marginBottom: 6 }}>
-            Plano
+            {mine.length ? 'Plano de hoje (com cortes)' : 'Plano'}
           </div>
           <div className="meal-items" style={{ margin: '0 0 8px' }}>
-            {meal.items.map((it, i) => (
-              <div key={i} className="meal-item">
-                <span>{itemLabel(it)}</span>
-                <span className="num muted">{it.grams ? `${it.grams} g` : ''}</span>
-                <span className="num">{it.grams ? fmtInt(itemTotals(it).kcal) : ''}</span>
-              </div>
-            ))}
+            {plate.items.map((it, i) => {
+              const cut = mine.find((c) => c.food === it.food);
+              const kcal = itemTotals(plan, it).kcal;
+              return (
+                <div key={i} className="meal-item">
+                  <span>
+                    {itemLabel(plan, it)}
+                    {cut && <div className="tiny warn-text">antes {meal.items[i].grams} g</div>}
+                  </span>
+                  <span className="num muted">{it.grams !== undefined ? `${it.grams} g` : ''}</span>
+                  <span className="num">{kcal > 0 ? fmtInt(kcal) : ''}</span>
+                </div>
+              );
+            })}
           </div>
-          <MacroChips t={planned} />
+          <MacroChips t={plateTotals} />
         </div>
 
         <Segmented
@@ -107,7 +122,13 @@ export function MealLogSheet({
           }}
         />
 
-        {status === 'planned' && <div className="hint">Comeu exatamente o plano. Saldo da refeição: zero.</div>}
+        {status === 'planned' && (
+          <div className="hint">
+            {mine.length
+              ? `Comeu o prato de hoje, já com os cortes (−${fmtInt(-delta)} kcal).`
+              : 'Comeu exatamente o plano. Saldo da refeição: zero.'}
+          </div>
+        )}
 
         {status === 'less' && (
           <div className="stack">
@@ -189,7 +210,13 @@ export function MealLogSheet({
             <MacroChips t={preview} />
           </div>
           <div className="tiny muted" style={{ marginTop: 6 }}>
-            {delta > 0 ? 'Débito no banco de calorias.' : delta < 0 ? 'Crédito no banco de calorias.' : 'Sem efeito no banco.'}
+            {delta > 0
+              ? 'Débito no banco de calorias.'
+              : delta < 0 && status === 'planned' && mine.length
+                ? 'Corte de hoje aplicado: é ele que fecha a meta ou paga a compensação.'
+                : delta < 0
+                  ? 'Crédito no banco de calorias.'
+                  : 'Sem efeito no banco.'}
           </div>
         </div>
 

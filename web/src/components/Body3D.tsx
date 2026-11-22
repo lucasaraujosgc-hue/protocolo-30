@@ -16,7 +16,6 @@ interface Level {
 }
 
 const SEG = 36;
-const MERIDIANS = 6;
 
 /** Semi-eixos (m) de uma elipse com circunferência C (cm) e razão largura/profundidade k (Ramanujan). */
 function axes(Ccm: number, k: number) {

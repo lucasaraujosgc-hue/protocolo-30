@@ -3,22 +3,32 @@ import { useMemo, useState } from 'react';
 import { LineChart } from '../components/LineChart';
 import { Delta, Segmented } from '../components/ui';
 import { addDays, fmtLong, fmtShort } from '../lib/dates';
-import { compensationToday, currentWeight, planCompensation, type BankRow } from '../lib/engine';
+import { compensationToday, currentWeight, dayCuts, planCompensation, type BankRow } from '../lib/engine';
 import { fmtInt } from '../lib/format';
-import { MEAL_BY_ID } from '../lib/plan';
 import { useStore } from '../lib/store';
 import type { CompMode } from '../lib/types';
 
+/** Minutos da sessão Z2 do protocolo (ex.: "Treino · 22 min · …"), para converter calorias em minutos extras. */
+function z2Minutes(blocks: string[]): number {
+  const total = blocks.reduce((a, b) => {
+    const m = b.match(/(\d+)\s*min/);
+    return a + (m ? Number(m[1]) : 0);
+  }, 0);
+  return total > 0 ? total : 30;
+}
+
 export function Bank() {
-  const { state, today, bank, targets, saveCompensation, saveDay, toast } = useStore();
+  const { state, today, nowMin, bank, protocol, plan: menu, targets, saveCompensation, saveDay, toast } = useStore();
   const [mode, setMode] = useState<CompMode>('mix');
   const [days, setDays] = useState(3);
+  const [startToday, setStartToday] = useState(nowMin < 12 * 60);
   const [openRow, setOpenRow] = useState<string | null>(null);
   const [explain, setExplain] = useState(false);
-  const s = state.settings;
+  const limits = protocol.bank;
   const debt = Math.max(0, -Math.round(bank.projected));
   const credit = Math.max(0, Math.round(bank.projected));
   const comp = compensationToday(state, today, bank.projected);
+  const compCuts = comp?.status === 'ativa' ? dayCuts(bank.today, comp) : null;
   const weight = currentWeight(state, today);
 
   const plan = useMemo(
@@ -28,12 +38,11 @@ export function Bank() {
         mode,
         days,
         foodShare: 0.5,
-        settings: s,
+        plan: menu,
         weightKg: weight,
-        z2PerMin: targets.z2.value / 30,
-        planKcal: bank.today.target.kcal,
+        z2PerMin: targets.z2.value / z2Minutes(protocol.training.sessions.z2.blocks),
       }),
-    [debt, mode, days, s, weight, targets, bank.today.target.kcal],
+    [debt, mode, days, menu, weight, targets, protocol],
   );
 
   const absorb = async (kcal: number) => {
@@ -50,14 +59,14 @@ export function Bank() {
       active: true,
       mode,
       days: plan.daysUsed,
-      startDate: addDays(today, 1),
+      startDate: startToday ? today : addDays(today, 1),
       foodShare: 0.5,
       debt: plan.debt - plan.absorbed,
       perDayFood: plan.perDayFood,
       perDayActive: plan.perDayActive,
       createdAt: new Date().toISOString(),
     });
-    if (ok) toast('Plano de compensação ativado a partir de amanhã');
+    if (ok) toast(`Plano de compensação ativado a partir de ${startToday ? 'hoje' : 'amanhã'}`);
   };
 
   const series = [{ points: bank.rows.map((r) => ({ date: r.date, value: r.cumulative })), color: '#7aa2f7', area: true }];
@@ -91,7 +100,7 @@ export function Bank() {
         </button>
         {explain && (
           <div className="hint" style={{ textAlign: 'left', marginTop: 8 }}>
-            Todo dia é comparado com o plano. <b>Comida:</b> meta − o que comeu (refeição sem registro = plano seguido). <b>Treino:</b> calorias ativas do relógio − meta da sessão; treino não feito tira a meta inteira. <b>Passos:</b> diferença da meta × {fmtInt(1000 * (0.5 * weight) / 1300)} kcal por mil passos. Créditos de treino e passos valem {Math.round(s.creditFactor * 100)}% porque relógios superestimam gasto; débitos valem 100%. Crédito = você está à frente do plano; débito = atrás.
+            Todo dia é comparado com o plano. <b>Comida:</b> meta − o que comeu (refeição sem registro = plano seguido). <b>Treino:</b> calorias ativas do relógio − meta da sessão; treino não feito tira a meta inteira. <b>Passos:</b> diferença da meta × {fmtInt(1000 * (0.5 * weight) / 1300)} kcal por mil passos. Créditos de treino e passos valem {Math.round(limits.creditFactor * 100)}% porque relógios superestimam gasto; débitos valem 100%. Crédito = você está à frente do plano; débito = atrás. Cada dia usa a versão do protocolo que estava em vigor nele.
           </div>
         )}
       </div>
@@ -120,9 +129,14 @@ export function Bank() {
             )}
             .
           </div>
-          {comp.reductions.length > 0 && (
+          {compCuts && compCuts.planGap > 0 && (
+            <div className="tiny muted" style={{ marginTop: 8 }}>
+              Os cortes abaixo incluem −{fmtInt(compCuts.planGap)} kcal porque a meta está abaixo do cardápio.
+            </div>
+          )}
+          {compCuts && compCuts.steps.length > 0 && (
             <div className="list" style={{ marginTop: 8 }}>
-              {comp.reductions.map((r) => (
+              {compCuts.steps.map((r) => (
                 <div key={`${r.meal}${r.food}`} className="list-row">
                   <span className="grow">
                     {r.mealName} · {r.foodName}
@@ -188,7 +202,7 @@ export function Bank() {
                 {plan.reductions.map((r) => (
                   <div key={`${r.meal}${r.food}`} className="list-row">
                     <span className="grow small">
-                      {MEAL_BY_ID[r.meal].short} · {r.foodName}
+                      {menu.mealById[r.meal]?.short ?? r.mealName} · {r.foodName}
                     </span>
                     <span className="num small">
                       {r.fromG} → {r.toG} g
@@ -204,10 +218,27 @@ export function Bank() {
             ))}
           </div>
           <div className="tiny muted" style={{ margin: '10px 0' }}>
-            Limites seguros: até {fmtInt(s.maxFoodCut)} kcal a menos de comida por dia, nunca abaixo de {fmtInt(s.foodFloor)} kcal, e até {fmtInt(s.maxExtraActive)} kcal ativas extras. Nada de pular refeição, jejum longo ou HIIT para compensar.
+            Limites seguros: até {fmtInt(limits.maxFoodCut)} kcal a menos de comida por dia, nunca abaixo de {fmtInt(limits.foodFloor)} kcal, e até {fmtInt(limits.maxExtraActive)} kcal ativas extras. Nada de pular refeição, jejum longo ou HIIT para compensar.
           </div>
-          <button className="btn primary block" onClick={activate}>
-            Ativar a partir de amanhã{plan.absorbed > 0 ? ` e absorver ${fmtInt(plan.absorbed)}` : ''}
+          <div className="label" style={{ margin: '4px 0 6px' }}>
+            Começar
+          </div>
+          <Segmented
+            options={[
+              { value: 'hoje', label: 'Hoje' },
+              { value: 'amanha', label: 'Amanhã' },
+            ]}
+            value={startToday ? 'hoje' : 'amanha'}
+            onChange={(v) => setStartToday(v === 'hoje')}
+          />
+          {startToday && plan.perDayFood > 0 && (
+            <div className="tiny muted" style={{ marginTop: 6 }}>
+              Os cortes valem para as refeições que ainda faltam hoje: ao tocar em “Segui”, elas entram já reduzidas.
+            </div>
+          )}
+          <button className="btn primary block" style={{ marginTop: 12 }} onClick={activate}>
+            Ativar a partir de {startToday ? 'hoje' : 'amanhã'}
+            {plan.absorbed > 0 ? ` e absorver ${fmtInt(plan.absorbed)}` : ''}
           </button>
           <button
             className="btn ghost block"
@@ -243,10 +274,10 @@ export function Bank() {
           <h3>Extrato</h3>
           <span className="tiny muted">{bank.rows.length} dia(s) fechado(s)</span>
         </div>
-        {rows.length === 0 && <div className="muted small">O extrato começa no dia 1 do protocolo ({fmtShort(s.startDate)}).</div>}
+        {rows.length === 0 && <div className="muted small">O extrato começa no dia 1 do protocolo ({fmtShort(state.settings.startDate)}).</div>}
         <div className="list">
           {rows.map((r) => (
-            <LedgerRow key={r.date} r={r} open={openRow === r.date} onToggle={() => setOpenRow(openRow === r.date ? null : r.date)} cf={s.creditFactor} />
+            <LedgerRow key={r.date} r={r} open={openRow === r.date} onToggle={() => setOpenRow(openRow === r.date ? null : r.date)} />
           ))}
         </div>
       </div>
@@ -254,8 +285,9 @@ export function Bank() {
   );
 }
 
-function LedgerRow({ r, open, onToggle, cf }: { r: BankRow; open: boolean; onToggle: () => void; cf: number }) {
+function LedgerRow({ r, open, onToggle }: { r: BankRow; open: boolean; onToggle: () => void }) {
   const ev = r.ev;
+  const cf = ev.creditFactor;
   return (
     <div style={{ borderBottom: '1px dashed rgba(120,200,255,.1)' }}>
       <button className="row" style={{ width: '100%', padding: '10px 0', textAlign: 'left' }} onClick={onToggle}>
@@ -274,10 +306,13 @@ function LedgerRow({ r, open, onToggle, cf }: { r: BankRow; open: boolean; onTog
       {open && (
         <div className="stack tight small" style={{ paddingBottom: 12 }}>
           {ev.meals
-            .filter((m) => m.log && m.log.status !== 'planned')
+            .filter((m) => m.log && Math.round(m.planned.kcal) !== Math.round(m.actual.kcal))
             .map((m) => (
               <div key={m.meal.id} className="row between">
-                <span className="muted">{m.meal.name}</span>
+                <span className="muted">
+                  {m.meal.name}
+                  {m.log?.status === 'planned' ? ' (com corte)' : ''}
+                </span>
                 <Delta v={Math.round(m.planned.kcal) - m.actual.kcal} />
               </div>
             ))}
@@ -287,6 +322,12 @@ function LedgerRow({ r, open, onToggle, cf }: { r: BankRow; open: boolean; onTog
               <Delta v={-ev.extras.kcal} />
             </div>
           )}
+          {ev.orphanMeals.map((o) => (
+            <div key={o.id} className="row between">
+              <span className="muted">Registro fora do cardápio ({o.id})</span>
+              <Delta v={-o.log.kcal} />
+            </div>
+          ))}
           {ev.sessions.map((s) => (
             <div key={s.planned.key} className="row between">
               <span className="muted">
@@ -311,7 +352,13 @@ function LedgerRow({ r, open, onToggle, cf }: { r: BankRow; open: boolean; onTog
               <Delta v={ev.absorbed} />
             </div>
           )}
-          {ev.target.kcal !== Math.round(ev.planned.kcal) && <div className="tiny dim">Meta do dia: {fmtInt(ev.target.kcal)} kcal</div>}
+          {ev.target.kcal !== Math.round(ev.planned.kcal) && (
+            <div className="row between">
+              <span className="muted">Cardápio {fmtInt(ev.planned.kcal)} kcal vs. meta {fmtInt(ev.target.kcal)} kcal</span>
+              <Delta v={ev.target.kcal - Math.round(ev.planned.kcal)} />
+            </div>
+          )}
+          <div className="tiny dim">Protocolo: {ev.protocol.name}</div>
         </div>
       )}
     </div>

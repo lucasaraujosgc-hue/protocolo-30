@@ -1,33 +1,37 @@
-import { Bike, Dumbbell, Footprints, Plus } from 'lucide-react';
+import { Bike, Footprints, Plus } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { ExerciseSheet } from '../components/ExerciseSheet';
 import { DateNav, Delta, NumberField } from '../components/ui';
 import { addDays, diffDays, fmtShort, parseISO, weekday } from '../lib/dates';
-import { evalDay, kcalPerStep, currentWeight, type DayEval, type SessionEval } from '../lib/engine';
+import { currentWeight, evalDay, kcalPerStep, protoAt, type DayEval, type SessionEval } from '../lib/engine';
 import { fmtInt } from '../lib/format';
-import { HR_ZONES, SPIN_TEMPLATES } from '../lib/schedule';
+import { ZONE_COLORS } from '../lib/schedule';
 import { useStore } from '../lib/store';
 import type { ExerciseLog, SpinTemplate } from '../lib/types';
-import { SessionRow } from './Home';
+import { ExtraSessionRow, SessionRow, exerciseName } from './Home';
 
 export function Training() {
-  const { state, today, nowMin, targets, saveDay, toast } = useStore();
+  const { state, today, nowMin, samples, saveDay, toast } = useStore();
   const [date, setDate] = useState(today);
   const [sheet, setSheet] = useState<{ session?: SessionEval; log?: ExerciseLog } | null>(null);
   const [steps, setSteps] = useState<number | undefined>(undefined);
-  const opts = { today, nowMin, targets };
-  const ev = useMemo(() => evalDay(state, date, opts), [state, date, today, nowMin, targets]); // eslint-disable-line react-hooks/exhaustive-deps
+  const opts = { today, nowMin, samples };
+  const ev = useMemo(() => evalDay(state, date, opts), [state, date, today, nowMin, samples]); // eslint-disable-line react-hooks/exhaustive-deps
   const start = state.settings.startDate;
+  // Zonas e treinos mostrados são os da versão do protocolo do dia selecionado.
+  const training = ev.protocol.training;
 
-  // Calendário do protocolo: começa na segunda da semana de início e cobre o dia 30.
+  // Calendário do protocolo: começa na segunda da semana de início e cobre o dia 30
+  // (ou até a semana atual, se você seguir depois do dia 30).
+  const span = Math.max(30, diffDays(today, start) + 1);
   const offset = (weekday(start) + 6) % 7;
   const calStart = addDays(start, -offset);
-  const calDays = Array.from({ length: Math.ceil((offset + 30) / 7) * 7 }, (_, i) => addDays(calStart, i));
+  const calDays = Array.from({ length: Math.ceil((offset + span) / 7) * 7 }, (_, i) => addDays(calStart, i));
   const evals = useMemo(() => {
     const m: Record<string, DayEval> = {};
     for (const d of calDays) m[d] = evalDay(state, d, opts);
     return m;
-  }, [state, today, nowMin, targets]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state, today, nowMin, samples]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const history = useMemo(() => {
     const out: { date: string; log: ExerciseLog }[] = [];
@@ -36,6 +40,7 @@ export function Training() {
   }, [state.days]);
 
   const weight = currentWeight(state, date);
+  const protocolAt = (d: string) => protoAt(state, d);
 
   return (
     <div className="screen">
@@ -50,17 +55,10 @@ export function Training() {
         </div>
         {ev.sessions.length === 0 && ev.extraSessions.length === 0 && <div className="muted small">Sem treino planejado. Descanso total ou caminhada leve.</div>}
         {ev.sessions.map((s) => (
-          <SessionRow key={s.planned.key} s={s} onClick={() => setSheet({ session: s, log: s.log })} />
+          <SessionRow key={s.planned.key} s={s} cf={ev.creditFactor} onClick={() => setSheet({ session: s, log: s.log })} />
         ))}
         {ev.extraSessions.map(({ log, dev }) => (
-          <div key={log.id} className="session" onClick={() => setSheet({ log })} role="button">
-            <div className={`session-icon ${log.kind === 'musculacao' ? 'lift' : ''}`}>{log.kind === 'musculacao' ? <Dumbbell size={20} /> : <Bike size={20} />}</div>
-            <div>
-              <div style={{ fontWeight: 600 }}>Extra</div>
-              <div className="tiny muted">{log.activeKcal ? `${fmtInt(log.activeKcal)} kcal ativas` : ''}</div>
-            </div>
-            <Delta v={dev * state.settings.creditFactor} />
-          </div>
+          <ExtraSessionRow key={log.id} log={log} dev={dev} cf={ev.creditFactor} sessionName={exerciseName(ev.protocol, log)} onClick={() => setSheet({ log })} />
         ))}
         {!ev.isFuture && ev.inProtocol && (
           <div className="row between small" style={{ marginTop: 8 }}>
@@ -115,7 +113,7 @@ export function Training() {
           {calDays.map((d) => {
             const e = evals[d];
             const n = diffDays(d, start) + 1;
-            const out = n < 1 || n > 30;
+            const out = n < 1 || n > span;
             return (
               <button
                 key={d}
@@ -153,9 +151,9 @@ export function Training() {
         <div className="card-title">
           <h3>Zonas no Apple Watch</h3>
         </div>
-        {HR_ZONES.map((z) => (
+        {training.zones.map((z) => (
           <div key={z.z} className="zone-bar">
-            <b style={{ color: z.color }}>Z{z.z}</b>
+            <b style={{ color: ZONE_COLORS[Math.min(ZONE_COLORS.length, Math.max(1, z.z)) - 1] }}>Z{z.z}</b>
             <span className="num small">{z.range}</span>
             <span className="small muted">{z.use}</span>
           </div>
@@ -177,23 +175,23 @@ export function Training() {
             </div>
             <div className="grow">
               <div style={{ fontWeight: 700 }}>
-                {SPIN_TEMPLATES[t].name}{' '}
+                {training.sessions[t].name}{' '}
                 <span className="tiny muted">
-                  · {SPIN_TEMPLATES[t].zone} · {SPIN_TEMPLATES[t].hr}
+                  · {training.sessions[t].zone} · {training.sessions[t].hr}
                 </span>
               </div>
-              {SPIN_TEMPLATES[t].blocks.map((b) => (
-                <div key={b} className="tiny muted">
+              {training.sessions[t].blocks.map((b, i) => (
+                <div key={i} className="tiny muted">
                   {b}
                 </div>
               ))}
-              <div className="tiny cyan">{SPIN_TEMPLATES[t].rpe}</div>
+              <div className="tiny cyan">{training.sessions[t].rpe}</div>
             </div>
           </div>
         ))}
         <div className="tiny muted" style={{ marginTop: 6 }}>
-          {state.settings.intervalsFrom
-            ? `Intervalado liberado a partir de ${fmtShort(state.settings.intervalsFrom)}.`
+          {training.intervalsFrom
+            ? `Intervalado liberado a partir de ${fmtShort(training.intervalsFrom)}.`
             : 'O intervalado entra só depois da revisão do dia 14 (aba Progresso).'}
         </div>
       </div>
@@ -211,7 +209,7 @@ export function Training() {
               </span>
               <div className="grow">
                 <div className="ellipsis">
-                  {log.kind === 'spinning' ? `Spinning · ${SPIN_TEMPLATES[log.template ?? 'livre'].name}` : log.kind === 'musculacao' ? 'Musculação' : 'Cardio'}
+                  {exerciseName(protocolAt(d), log)}
                   {log.status === 'missed' ? ' · não feito' : log.status === 'partial' ? ' · parcial' : ''}
                 </div>
                 <div className="tiny dim">

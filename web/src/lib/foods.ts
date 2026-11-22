@@ -1,13 +1,13 @@
-import type { LogItem, Totals } from './types';
+import type { LogItem, ProtoFood, Totals } from './types';
 
 export interface Food {
   id: string;
   name: string;
-  group: 'Proteínas' | 'Carboidratos' | 'Frutas' | 'Gorduras' | 'Vegetais' | 'Laticínios';
+  group: string;
   /** Valores por 100 g (ou 100 ml). */
   per100: Totals;
   unit?: { label: string; grams: number };
-  source: 'TACO' | 'USDA' | 'Rótulo típico';
+  source: string;
 }
 
 /**
@@ -50,6 +50,15 @@ export const FOODS: Food[] = [
 ];
 
 export const FOOD_BY_ID: Record<string, Food> = Object.fromEntries(FOODS.map((f) => [f.id, f]));
+
+/** Tabela embutida + alimentos extras do protocolo (os do protocolo têm prioridade). */
+export function foodIndex(custom: ProtoFood[] = []): Record<string, Food> {
+  const out: Record<string, Food> = { ...FOOD_BY_ID };
+  for (const f of custom) {
+    out[f.id] = { id: f.id, name: f.name, group: f.group ?? 'Outros', per100: f.per100, unit: f.unit, source: f.source ?? 'Protocolo' };
+  }
+  return out;
+}
 
 export interface Preset {
   id: string;

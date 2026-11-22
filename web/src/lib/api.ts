@@ -1,4 +1,4 @@
-import type { Compensation, DayLog, Measurement, Profile, RawState, Settings } from './types';
+import type { Compensation, DayLog, Measurement, Profile, Protocol, RawState, Settings } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -31,6 +31,7 @@ export const api = {
   logout: () => req<{ ok: true }>('POST', '/api/logout', {}),
   profile: (p: Profile) => req<RawState>('PUT', '/api/profile', p),
   settings: (s: Settings) => req<RawState>('PUT', '/api/settings', s),
+  protocols: (protocols: Protocol[]) => req<RawState>('PUT', '/api/protocols', { protocols }),
   day: (date: string, d: DayLog) => req<RawState>('PUT', `/api/day/${date}`, d),
   measurement: (m: Measurement) => req<RawState>('PUT', `/api/measurements/${m.id}`, m),
   deleteMeasurement: (id: string) => req<RawState>('DELETE', `/api/measurements/${id}`, {}),

@@ -1,7 +1,8 @@
 import { Minus, Plus, Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { FOODS, PRESETS, foodItem, normalizeText, presetItem, type Food, type Preset } from '../lib/foods';
+import { PRESETS, foodItem, normalizeText, presetItem, type Food, type Preset } from '../lib/foods';
 import { fmt1, fmtInt } from '../lib/format';
+import { useStore } from '../lib/store';
 import type { LogItem } from '../lib/types';
 import { MacroChips, NumberField, Segmented } from './ui';
 
@@ -17,8 +18,10 @@ export function FoodPicker({ onAdd, initialTab = 'foods' }: { onAdd: (item: LogI
   const [kcalOverride, setKcalOverride] = useState<number | undefined>(undefined);
   const [manual, setManual] = useState<{ name: string; kcal?: number; p?: number; c?: number; f?: number }>({ name: '' });
 
+  // Tabela embutida + alimentos que o protocolo em vigor acrescentou.
+  const { plan } = useStore();
   const nq = normalizeText(q);
-  const foods = useMemo(() => FOODS.filter((f) => !nq || normalizeText(f.name).includes(nq)), [nq]);
+  const foods = useMemo(() => Object.values(plan.foods).filter((f) => !nq || normalizeText(f.name).includes(nq)), [nq, plan]);
   const presets = useMemo(() => PRESETS.filter((p) => !nq || normalizeText(p.name).includes(nq)), [nq]);
 
   const foodPreview = food && grams ? foodItem(food, grams) : null;
@@ -137,13 +140,19 @@ export function FoodPicker({ onAdd, initialTab = 'foods' }: { onAdd: (item: LogI
               <div className="row between">
                 <span className="muted small">Quantidade</span>
                 <div className="row">
-                  <button className="icon-btn" type="button" onClick={() => setQty((q0) => Math.max(0.5, q0 - 0.5))} aria-label="Menos">
+                  <button className="icon-btn" type="button" onClick={() => {
+                      setQty((q0) => Math.max(0.5, q0 - 0.5));
+                      setKcalOverride(undefined);
+                    }} aria-label="Menos">
                     <Minus size={16} />
                   </button>
                   <span className="num" style={{ minWidth: 34, textAlign: 'center' }}>
                     {fmt1(qty)}
                   </span>
-                  <button className="icon-btn" type="button" onClick={() => setQty((q0) => q0 + 0.5)} aria-label="Mais">
+                  <button className="icon-btn" type="button" onClick={() => {
+                      setQty((q0) => q0 + 0.5);
+                      setKcalOverride(undefined);
+                    }} aria-label="Mais">
                     <Plus size={16} />
                   </button>
                 </div>

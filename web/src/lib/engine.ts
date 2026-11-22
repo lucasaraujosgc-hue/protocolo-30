@@ -1,10 +1,12 @@
 import { addDays, diffDays, minutesOf, rangeDates } from './dates';
 import { sumItems } from './foods';
-import { MEALS, mealTotals, reductionPlan, type Meal, type ReductionStep } from './plan';
+import { mealTotals, planOf, reductionPlan, type Meal, type Plan, type ReductionStep } from './plan';
+import { protocolFor, sortProtocols } from './protocol';
 import { plannedSessions, type PlannedSession } from './schedule';
 import type {
   AppState,
   CompMode,
+  DailyTargets,
   DayLog,
   ExerciseLog,
   LogItem,
@@ -14,23 +16,26 @@ import type {
   Measurement,
   MeasureKey,
   Profile,
-  Settings,
+  Protocol,
+  SpinTemplate,
   TargetKey,
-  TargetPeriod,
   Totals,
 } from './types';
+import { SPIN_KEYS, TARGET_KEYS } from './types';
 
 /* ------------------------------------------------------------------ básicos */
 
 export const ZERO: Totals = { kcal: 0, p: 0, c: 0, f: 0 };
 export const addT = (a: Totals, b: Totals): Totals => ({ kcal: a.kcal + b.kcal, p: a.p + b.p, c: a.c + b.c, f: a.f + b.f });
 export const scaleT = (a: Totals, k: number): Totals => ({ kcal: a.kcal * k, p: a.p * k, c: a.c * k, f: a.f * k });
+/** Arredonda para 0,1 (kcal inclusive): somar refeições registradas dá exatamente o total do cardápio. */
 export const roundT = (a: Totals): Totals => ({
-  kcal: Math.round(a.kcal),
+  kcal: Math.round(a.kcal * 10) / 10,
   p: Math.round(a.p * 10) / 10,
   c: Math.round(a.c * 10) / 10,
   f: Math.round(a.f * 10) / 10,
 });
+const totalsOf = (t: Totals): Totals => ({ kcal: t.kcal, p: t.p, c: t.c, f: t.f });
 
 export const emptyDay = (): DayLog => ({ meals: {}, extras: [], exercises: [] });
 export const getDay = (state: AppState, date: string): DayLog => state.days[date] ?? emptyDay();
@@ -45,21 +50,38 @@ export function median(xs: number[]): number {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
-export function targetFor(settings: Settings, date: string): TargetPeriod {
-  const sorted = [...settings.targets].sort((a, b) => a.from.localeCompare(b.from));
-  let t = sorted[0];
-  for (const x of sorted) if (x.from <= date) t = x;
-  return t;
-}
+/** Versão do protocolo em vigor numa data. */
+export const protoAt = (state: AppState, date: string): Protocol => protocolFor(state.protocols, date);
+/** Cardápio/metas resolvidos da versão em vigor numa data. */
+export const planAt = (state: AppState, date: string): Plan => planOf(protoAt(state, date));
 
 /* ---------------------------------------------------------- registro refeição */
 
+/** A refeição com os cortes do dia aplicados (gramas reduzidas). */
+export function mealWithCuts(meal: Meal, cuts: ReductionStep[] = []): Meal {
+  const mine = cuts.filter((c) => c.meal === meal.id);
+  if (!mine.length) return meal;
+  const done = new Set<string>();
+  return {
+    ...meal,
+    items: meal.items.map((it) => {
+      // O corte vale para o primeiro item daquele alimento na refeição (o mesmo que a ordem de cortes usou).
+      const c = mine.find((x) => x.food === it.food);
+      if (!c || !it.grams || done.has(c.food)) return it;
+      done.add(c.food);
+      return { ...it, grams: Math.max(0, c.toG) };
+    }),
+  };
+}
+
 export function makeMealLog(
+  plan: Plan,
   meal: Meal,
   status: MealStatus,
-  opts: { items?: LogItem[]; fraction?: number; note?: string } = {},
+  opts: { items?: LogItem[]; fraction?: number; note?: string; cuts?: ReductionStep[] } = {},
 ): MealLog {
-  const planned = mealTotals(meal);
+  // "Segui" com cortes do dia (compensação ou meta abaixo do cardápio) registra o prato reduzido.
+  const planned = mealTotals(plan, mealWithCuts(meal, opts.cuts));
   let t: Totals = planned;
   let items: LogItem[] | undefined;
   let fraction: number | undefined;
@@ -87,6 +109,9 @@ export function targetKeyOf(ex: Pick<ExerciseLog, 'kind' | 'template'>): TargetK
   return 'outro';
 }
 
+/** Sem calorias do relógio, "fiz parte" conta como esta fração da meta da sessão. */
+export const PARTIAL_SHARE = 0.5;
+
 export interface TargetInfo {
   value: number;
   manual: number;
@@ -94,26 +119,45 @@ export interface TargetInfo {
   samples: number;
 }
 
-const TARGET_KEYS: TargetKey[] = ['z2', 'tempo', 'intervalado', 'livre', 'musculacao', 'outro'];
+/** Amostras de calorias ativas por tipo de treino, separadas pela "assinatura" da sessão no protocolo. */
+export type Samples = Record<string, number[]>;
 
-/** Meta de calorias ativas por tipo de treino; com calibração, vira a mediana das 3 primeiras sessões. */
-export function exerciseTargets(state: AppState): Record<TargetKey, TargetInfo> {
-  const s = state.settings;
-  const samples = Object.fromEntries(TARGET_KEYS.map((k) => [k, [] as number[]])) as Record<TargetKey, number[]>;
+/**
+ * A calibração recomeça quando uma versão do protocolo muda a sessão ou a meta manual daquele tipo
+ * (ex.: um Z2 de 45 min não herda as calorias do Z2 de 30 min).
+ */
+function sigOf(p: Protocol, k: TargetKey): string {
+  const sess = (SPIN_KEYS as string[]).includes(k) ? p.training.sessions[k as SpinTemplate] : null;
+  return `${k}|${p.training.exerciseTargets[k]}|${sess ? JSON.stringify(sess.blocks) : ''}`;
+}
+
+export function calibrationSamples(state: AppState): Samples {
+  const out: Samples = {};
+  const versions = sortProtocols(state.protocols);
   const dates = Object.keys(state.days)
-    .filter((d) => d >= s.startDate)
+    .filter((d) => d >= state.settings.startDate)
     .sort();
   for (const d of dates) {
+    let p = versions[0];
+    for (const v of versions) if (v.from <= d) p = v;
     for (const ex of state.days[d].exercises) {
-      if (ex.status === 'done' && ex.activeKcal && ex.activeKcal > 0) samples[targetKeyOf(ex)].push(ex.activeKcal);
+      if (ex.status !== 'done' || !ex.activeKcal || ex.activeKcal <= 0) continue;
+      const key = sigOf(p, targetKeyOf(ex));
+      (out[key] ??= []).push(ex.activeKcal);
     }
   }
+  return out;
+}
+
+/** Meta de calorias ativas por tipo de treino; com calibração, vira a mediana das 3 primeiras sessões. */
+export function exerciseTargets(protocol: Protocol, samples: Samples): Record<TargetKey, TargetInfo> {
   const out = {} as Record<TargetKey, TargetInfo>;
   for (const k of TARGET_KEYS) {
-    const manual = s.exerciseTargets[k];
-    const first = samples[k].slice(0, 3);
-    const calibrated = s.autoCalibrate && first.length >= 3;
-    out[k] = { value: calibrated ? Math.round(median(first)) : manual, manual, calibrated, samples: samples[k].length };
+    const manual = protocol.training.exerciseTargets[k];
+    const list = samples[sigOf(protocol, k)] ?? [];
+    const first = list.slice(0, 3);
+    const calibrated = protocol.bank.autoCalibrate && first.length >= 3;
+    out[k] = { value: calibrated ? Math.round(median(first)) : manual, manual, calibrated, samples: list.length };
   }
   return out;
 }
@@ -168,8 +212,12 @@ export interface DayEval {
   isToday: boolean;
   isPast: boolean;
   isFuture: boolean;
-  target: TargetPeriod;
+  protocol: Protocol;
+  plan: Plan;
+  target: DailyTargets;
   meals: MealEval[];
+  /** Registros de refeições que não existem no cardápio desta versão (ex.: cardápio trocado no mesmo dia). */
+  orphanMeals: { id: MealId; log: MealLog }[];
   extras: Totals;
   planned: Totals;
   actual: Totals;
@@ -179,6 +227,7 @@ export interface DayEval {
   extraSessions: { log: ExerciseLog; dev: number }[];
   exDevRaw: number;
   exDevAdj: number;
+  creditFactor: number;
   steps?: number;
   stepsTarget: number;
   stepsDevRaw: number;
@@ -193,51 +242,56 @@ export interface DayEval {
 export interface EvalOpts {
   today: string;
   nowMin: number;
-  targets?: Record<TargetKey, TargetInfo>;
+  samples?: Samples;
 }
 
 export function evalDay(state: AppState, date: string, opts: EvalOpts): DayEval {
-  const s = state.settings;
-  const cf = s.creditFactor;
+  const protocol = protoAt(state, date);
+  const plan = planOf(protocol);
+  const cf = protocol.bank.creditFactor;
   const adj = (x: number) => (x > 0 ? x * cf : x);
-  const targets = opts.targets ?? exerciseTargets(state);
+  const targets = exerciseTargets(protocol, opts.samples ?? calibrationSamples(state));
   const day = getDay(state, date);
-  const dayNumber = diffDays(date, s.startDate) + 1;
+  const dayNumber = diffDays(date, state.settings.startDate) + 1;
   const isToday = date === opts.today;
   const isPast = date < opts.today;
   const isFuture = date > opts.today;
-  const target = targetFor(s, date);
+  const target = protocol.targets;
 
-  const meals: MealEval[] = MEALS.map((meal) => {
-    const planned = mealTotals(meal);
+  const meals: MealEval[] = plan.meals.map((meal) => {
+    const planned = mealTotals(plan, meal);
     const log = day.meals[meal.id];
-    const actual = log ? { kcal: log.kcal, p: log.p, c: log.c, f: log.f } : planned;
+    const actual = log ? totalsOf(log) : planned;
     const passed = isPast || (isToday && minutesOf(meal.time) <= opts.nowMin);
     return { meal, planned, actual, log, passed, consumed: !!log || passed };
   });
-  const extras = day.extras.reduce((acc, e) => addT(acc, e), ZERO);
+  const orphanMeals = Object.entries(day.meals)
+    .filter(([id]) => !plan.mealById[id])
+    .map(([id, log]) => ({ id, log }));
+  const orphanT = orphanMeals.reduce((acc, o) => addT(acc, totalsOf(o.log)), ZERO);
+  const extras = day.extras.reduce((acc, e) => addT(acc, totalsOf(e)), ZERO);
   const planned = meals.reduce((acc, m) => addT(acc, m.planned), ZERO);
   const actual = addT(
     meals.reduce((acc, m) => addT(acc, m.actual), ZERO),
-    extras,
+    addT(extras, orphanT),
   );
   const consumed = isFuture
-    ? extras
+    ? addT(extras, orphanT)
     : addT(
         meals.filter((m) => m.consumed).reduce((acc, m) => addT(acc, m.actual), ZERO),
-        extras,
+        addT(extras, orphanT),
       );
   const foodDev = isFuture ? 0 : target.kcal - Math.round(actual.kcal);
 
-  const planned_ = plannedSessions(s, date);
+  const plannedList = plannedSessions(protocol.training, state.settings.startDate, date);
   const used = new Set<string>();
-  const sessions: SessionEval[] = planned_.map((p) => {
+  const sessions: SessionEval[] = plannedList.map((p) => {
     const log = day.exercises.find((e) => e.plannedKey === p.key && !used.has(e.id));
     if (log) used.add(log.id);
     const t = targets[p.targetKey].value;
     if (!log) return { planned: p, target: t, dev: 0, state: 'pending' as SessionState };
     if (log.status === 'missed') return { planned: p, log, target: t, dev: -t, state: 'missed' as SessionState };
-    const active = log.activeKcal ?? t;
+    const active = log.activeKcal ?? (log.status === 'partial' ? t * PARTIAL_SHARE : t);
     return { planned: p, log, target: t, dev: active - t, state: log.status as SessionState };
   });
   const extraSessions = day.exercises
@@ -265,9 +319,9 @@ export function evalDay(state: AppState, date: string, opts: EvalOpts): DayEval 
   const pendingSessions = sessions.filter((x) => x.state === 'pending' && (isPast || isToday)).length;
 
   const flags: string[] = [];
-  const changedMeals = meals.some((m) => m.log && m.log.status !== 'planned');
-  if (!isFuture && changedMeals && actual.kcal < s.foodFloor - 250) flags.push('comeu_pouco');
-  if (!isFuture && changedMeals && actual.p < 150) flags.push('proteina_baixa');
+  const changedMeals = meals.some((m) => m.log && m.log.status !== 'planned') || orphanMeals.length > 0;
+  if (!isFuture && changedMeals && actual.kcal < protocol.bank.foodFloor - 250) flags.push('comeu_pouco');
+  if (!isFuture && changedMeals && actual.p < target.p * 0.75) flags.push('proteina_baixa');
 
   return {
     date,
@@ -276,8 +330,11 @@ export function evalDay(state: AppState, date: string, opts: EvalOpts): DayEval 
     isToday,
     isPast,
     isFuture,
+    protocol,
+    plan,
     target,
     meals,
+    orphanMeals,
     extras,
     planned,
     actual,
@@ -287,6 +344,7 @@ export function evalDay(state: AppState, date: string, opts: EvalOpts): DayEval 
     extraSessions,
     exDevRaw,
     exDevAdj,
+    creditFactor: cf,
     steps,
     stepsTarget,
     stepsDevRaw,
@@ -315,8 +373,7 @@ export interface BankSummary {
 }
 
 export function bankSummary(state: AppState, opts: EvalOpts): BankSummary {
-  const targets = opts.targets ?? exerciseTargets(state);
-  const o = { ...opts, targets };
+  const o = { ...opts, samples: opts.samples ?? calibrationSamples(state) };
   const start = state.settings.startDate;
   const yesterday = addDays(opts.today, -1);
   const rows: BankRow[] = [];
@@ -337,10 +394,9 @@ export interface CompInput {
   mode: CompMode;
   days: number;
   foodShare: number;
-  settings: Settings;
+  plan: Plan;
   weightKg: number;
   z2PerMin: number;
-  planKcal: number;
 }
 
 export interface CompResult {
@@ -366,9 +422,12 @@ export const MAX_COMP_DAYS = 14;
 
 export function planCompensation(i: CompInput): CompResult {
   const debt = Math.max(0, Math.round(i.debt));
-  const cf = i.settings.creditFactor;
-  const capFood = i.mode === 'exercise' ? 0 : Math.max(0, Math.min(i.settings.maxFoodCut, i.planKcal - i.settings.foodFloor));
-  const capActive = i.mode === 'food' ? 0 : i.settings.maxExtraActive;
+  const bank = i.plan.protocol.bank;
+  const cf = bank.creditFactor;
+  // O corte só vale sobre o que o cardápio permite sem furar o piso de calorias.
+  const menuKcal = Math.min(i.plan.kcal, i.plan.protocol.targets.kcal);
+  const capFood = i.mode === 'exercise' ? 0 : Math.max(0, Math.min(bank.maxFoodCut, menuKcal - bank.foodFloor));
+  const capActive = i.mode === 'food' ? 0 : bank.maxExtraActive;
   const capEff = capActive * cf;
   const perDayCap = capFood + capEff;
   const notes: string[] = [];
@@ -392,8 +451,12 @@ export function planCompensation(i: CompInput): CompResult {
   };
   if (debt === 0) return base;
   if (perDayCap <= 0) {
-    notes.push('Os limites atuais não deixam margem para compensar. Ajuste os limites em Ajustes ou absorva o débito.');
-    return { ...base, absorbed: debt, absorbedDays: Math.ceil(debt / 800) };
+    notes.push(
+      i.mode === 'food'
+        ? 'O cardápio já está no piso de calorias: não dá para compensar só com comida. Use o modo misto ou exercício, ou absorva.'
+        : 'Os limites atuais não deixam margem para compensar. Ajuste os limites em Ajustes ou absorva o débito.',
+    );
+    return { ...base, absorbed: debt, absorbedDays: Math.max(1, Math.round(debt / 800)) };
   }
   const minDays = Math.ceil(debt / perDayCap);
   const daysUsed = Math.max(i.days, Math.min(minDays, MAX_COMP_DAYS));
@@ -441,7 +504,7 @@ export function planCompensation(i: CompInput): CompResult {
     steps: Math.round(active / kcalPerStep(w) / 100) * 100,
     walkMin: Math.round(active / walkKcalPerMin(w)),
     z2Min: i.z2PerMin > 0 ? Math.round(active / i.z2PerMin) : 0,
-    reductions: reductionPlan(food).steps,
+    reductions: reductionPlan(i.plan, food).steps,
   };
 }
 
@@ -453,7 +516,6 @@ export interface CompToday {
   active: number;
   steps: number;
   walkMin: number;
-  reductions: ReductionStep[];
   progress: number;
   remainingDebt: number;
 }
@@ -477,10 +539,30 @@ export function compensationToday(state: AppState, today: string, bankProjected:
     active: c.perDayActive,
     steps: Math.round(c.perDayActive / kcalPerStep(w) / 100) * 100,
     walkMin: Math.round(c.perDayActive / walkKcalPerMin(w)),
-    reductions: reductionPlan(c.perDayFood).steps,
     progress,
     remainingDebt,
   };
+}
+
+export interface DayCuts {
+  /** kcal a cortar porque a meta da versão ficou abaixo do cardápio. */
+  planGap: number;
+  /** kcal a cortar pela compensação ativa (só no dia de hoje). */
+  compFood: number;
+  kcal: number;
+  steps: ReductionStep[];
+  /** Parte do corte que a ordem de cortes não conseguiu distribuir. */
+  uncovered: number;
+}
+
+/** Cortes concretos (em gramas) para um dia: meta abaixo do cardápio + compensação ativa hoje. */
+export function dayCuts(ev: Pick<DayEval, 'plan' | 'target' | 'isToday'>, comp: CompToday | null): DayCuts {
+  const planGap = Math.max(0, ev.plan.kcal - ev.target.kcal);
+  const compFood = ev.isToday && comp?.status === 'ativa' ? comp.food : 0;
+  const kcal = planGap + compFood;
+  if (kcal <= 0) return { planGap, compFood, kcal: 0, steps: [], uncovered: 0 };
+  const r = reductionPlan(ev.plan, kcal);
+  return { planGap, compFood, kcal, steps: r.steps, uncovered: Math.max(0, Math.round(kcal - r.total)) };
 }
 
 /* ------------------------------------------------------- composição corporal */
@@ -788,10 +870,12 @@ export function intervalCriteria(state: AppState): { tempoRpe: boolean | null; r
 
 /* ------------------------------------------------------- refeição do momento */
 
-export function currentMealIndex(nowMin: number): { index: number; phase: 'antes' | 'agora' | 'encerrado' } {
-  const starts = MEALS.map((m) => minutesOf(m.time) - 45);
+export function currentMealIndex(meals: Meal[], nowMin: number): { index: number; phase: 'antes' | 'agora' | 'encerrado' } {
+  if (!meals.length) return { index: 0, phase: 'antes' };
+  const starts = meals.map((m) => minutesOf(m.time) - 45);
+  const close = Math.max(minutesOf('21:00'), minutesOf(meals[meals.length - 1].time) + 60);
   if (nowMin < starts[0]) return { index: 0, phase: 'antes' };
-  if (nowMin >= minutesOf('21:00')) return { index: MEALS.length - 1, phase: 'encerrado' };
+  if (nowMin >= close) return { index: meals.length - 1, phase: 'encerrado' };
   let idx = 0;
   for (let i = 0; i < starts.length; i++) if (nowMin >= starts[i]) idx = i;
   return { index: idx, phase: 'agora' };

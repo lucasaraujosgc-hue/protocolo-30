@@ -2,22 +2,23 @@ import { Check, ChevronDown, Pencil, Pizza, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { ExtraSheet, MealLogSheet, STATUS_CHIP, STATUS_LABEL } from '../components/MealSheets';
 import { DateNav, Delta, MacroChips } from '../components/ui';
-import { compensationToday, evalDay, makeMealLog, type MealEval } from '../lib/engine';
+import { compensationToday, dayCuts, evalDay, makeMealLog, mealWithCuts, type MealEval } from '../lib/engine';
 import { fmt1, fmtInt } from '../lib/format';
-import { MEALS, itemLabel, itemTotals, reductionPlan, SUBSTITUTIONS } from '../lib/plan';
+import { itemLabel, itemTotals, type Plan as PlanT, type ReductionStep } from '../lib/plan';
 import { useStore } from '../lib/store';
 
 export function Plan() {
-  const { state, today, nowMin, targets, bank, saveDay, toast } = useStore();
+  const { state, today, nowMin, samples, bank, saveDay, toast } = useStore();
   const [date, setDate] = useState(today);
   const [open, setOpen] = useState<string | null>(null);
   const [sheet, setSheet] = useState<{ t: 'meal'; i: number } | { t: 'extra' } | null>(null);
-  const ev = useMemo(() => evalDay(state, date, { today, nowMin, targets }), [state, date, today, nowMin, targets]);
+  const ev = useMemo(() => evalDay(state, date, { today, nowMin, samples }), [state, date, today, nowMin, samples]);
   const comp = date === today ? compensationToday(state, today, bank.projected) : null;
-  const compFood = comp?.status === 'ativa' ? comp.food : 0;
-  const planGap = Math.max(0, Math.round(ev.planned.kcal) - ev.target.kcal);
-  const cut = planGap + compFood;
-  const reductions = cut > 0 ? reductionPlan(cut) : null;
+  const cuts = dayCuts(ev, comp);
+  const compFood = cuts.compFood;
+  const planGap = cuts.planGap;
+  const cut = cuts.kcal;
+  const subs = ev.protocol.substitutions;
   const total = ev.actual;
   const pct = (g: number, k: number) => (total.kcal > 0 ? ((g * k) / total.kcal) * 100 : 0);
 
@@ -71,17 +72,21 @@ export function Plan() {
           <span>C {Math.round(pct(total.c, 4))}%</span>
           <span>G {Math.round(pct(total.f, 9))}%</span>
         </div>
-        {ev.flags.includes('proteina_baixa') && <div className="hint warn" style={{ marginTop: 10 }}>Proteína abaixo de 150 g hoje. Para preservar músculo, complete com whey, ovos ou frango.</div>}
+        {ev.flags.includes('proteina_baixa') && (
+          <div className="hint warn" style={{ marginTop: 10 }}>
+            Proteína abaixo de {fmtInt(ev.target.p * 0.75)} g neste dia. Para preservar músculo, complete com whey, ovos ou frango.
+          </div>
+        )}
         {ev.flags.includes('comeu_pouco') && <div className="hint warn" style={{ marginTop: 10 }}>Você comeu bem abaixo do piso. Um dia assim não faz mal, mas repetido custa massa muscular.</div>}
       </div>
 
-      {reductions && reductions.steps.length > 0 && (
+      {cut > 0 && (
         <div className="card warn">
           <div className="card-title">
-            <h3>Ajustes de hoje · −{fmtInt(cut)} kcal</h3>
+            <h3>Ajustes {date === today ? 'de hoje' : 'do dia'} · −{fmtInt(cut)} kcal</h3>
           </div>
           <div className="list">
-            {reductions.steps.map((r) => (
+            {cuts.steps.map((r) => (
               <div key={`${r.meal}${r.food}`} className="list-row">
                 <div className="grow">
                   <div>
@@ -97,8 +102,14 @@ export function Plan() {
           </div>
           <div className="tiny muted" style={{ marginTop: 6 }}>
             {compFood > 0 ? 'Corte da compensação ativa. ' : ''}
-            {planGap > 0 ? 'Sua meta atual está abaixo do cardápio base. ' : ''}A proteína e o pré-treino ficam intactos.
+            {planGap > 0 ? `A meta desta versão (${fmtInt(ev.target.kcal)} kcal) está abaixo do cardápio (${fmtInt(ev.plan.kcal)} kcal). ` : ''}
+            Ao tocar em “Segui”, a refeição é registrada já com o corte.
           </div>
+          {cuts.uncovered > 0 && (
+            <div className="hint warn" style={{ marginTop: 8 }}>
+              A ordem de cortes do protocolo não cobre {fmtInt(cuts.uncovered)} kcal. Registre como “A menos” ou ajuste o protocolo.
+            </div>
+          )}
         </div>
       )}
 
@@ -106,17 +117,52 @@ export function Plan() {
         <MealCard
           key={me.meal.id}
           me={me}
+          plan={ev.plan}
+          cuts={cuts.steps}
           open={open === me.meal.id}
           onToggle={() => setOpen(open === me.meal.id ? null : me.meal.id)}
           onLog={() => setSheet({ t: 'meal', i })}
           onQuick={async () => {
             const ok = await saveDay(date, (d) => {
-              d.meals[me.meal.id] = makeMealLog(me.meal, 'planned');
+              d.meals[me.meal.id] = makeMealLog(ev.plan, me.meal, 'planned', { cuts: cuts.steps });
             });
             if (ok) toast(`${me.meal.short} conforme o plano`);
           }}
         />
       ))}
+
+      {ev.orphanMeals.length > 0 && (
+        <div className="card warn">
+          <div className="card-title">
+            <h3>Registros fora do cardápio desta versão</h3>
+          </div>
+          <div className="tiny muted" style={{ marginBottom: 8 }}>
+            O protocolo deste dia mudou depois destes registros. Eles continuam contando no total; apague se estiverem duplicados.
+          </div>
+          <div className="list">
+            {ev.orphanMeals.map((o) => (
+              <div key={o.id} className="list-row">
+                <div className="grow">
+                  <div className="ellipsis">Refeição “{o.id}”</div>
+                  <div className="tiny dim">{STATUS_LABEL[o.log.status]}</div>
+                </div>
+                <span className="num">{fmtInt(o.log.kcal)}</span>
+                <button
+                  className="icon-btn"
+                  aria-label="Apagar"
+                  onClick={() =>
+                    saveDay(date, (d) => {
+                      delete d.meals[o.id];
+                    })
+                  }
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <div className="card-title">
@@ -164,7 +210,7 @@ export function Plan() {
           <div className="label">Carboidratos · cada linha ≈ 30 g</div>
           <table className="table" style={{ marginTop: 6 }}>
             <tbody>
-              {SUBSTITUTIONS.carbs.map((s) => (
+              {subs.carbs.map((s) => (
                 <tr key={s.food}>
                   <td>{s.food}</td>
                   <td className="num">{s.qty}</td>
@@ -178,7 +224,7 @@ export function Plan() {
           </div>
           <table className="table" style={{ marginTop: 6 }}>
             <tbody>
-              {SUBSTITUTIONS.proteins.map((s) => (
+              {subs.proteins.map((s) => (
                 <tr key={s.food}>
                   <td>{s.food}</td>
                   <td className="num">{s.qty}</td>
@@ -191,15 +237,32 @@ export function Plan() {
       </details>
 
       {sheet?.t === 'meal' && (
-        <MealLogSheet date={date} meal={MEALS[sheet.i]} log={ev.meals[sheet.i].log} onClose={() => setSheet(null)} />
+        <MealLogSheet date={date} plan={ev.plan} meal={ev.meals[sheet.i].meal} log={ev.meals[sheet.i].log} cuts={cuts.steps} onClose={() => setSheet(null)} />
       )}
       {sheet?.t === 'extra' && <ExtraSheet date={date} onClose={() => setSheet(null)} />}
     </div>
   );
 }
 
-function MealCard({ me, open, onToggle, onLog, onQuick }: { me: MealEval; open: boolean; onToggle: () => void; onLog: () => void; onQuick: () => void }) {
+function MealCard({
+  me,
+  plan,
+  cuts,
+  open,
+  onToggle,
+  onLog,
+  onQuick,
+}: {
+  me: MealEval;
+  plan: PlanT;
+  cuts: ReductionStep[];
+  open: boolean;
+  onToggle: () => void;
+  onLog: () => void;
+  onQuick: () => void;
+}) {
   const status = me.log?.status;
+  const plate = mealWithCuts(me.meal, cuts);
   return (
     <div className={`card ${status && status !== 'planned' ? (status === 'more' ? 'warn' : '') : ''}`}>
       <button className="row between" style={{ width: '100%', textAlign: 'left' }} onClick={onToggle}>
@@ -220,13 +283,20 @@ function MealCard({ me, open, onToggle, onLog, onQuick }: { me: MealEval; open: 
       {open && (
         <>
           <div className="meal-items">
-            {me.meal.items.map((it, i) => (
-              <div key={i} className="meal-item">
-                <span>{itemLabel(it)}</span>
-                <span className="num muted">{it.grams ? `${it.grams} g` : ''}</span>
-                <span className="num">{it.grams ? fmtInt(itemTotals(it).kcal) : ''}</span>
-              </div>
-            ))}
+            {me.meal.items.map((it, i) => {
+              const kcal = itemTotals(plan, it).kcal;
+              const today = plate.items[i];
+              return (
+                <div key={i} className="meal-item">
+                  <span>
+                    {itemLabel(plan, it)}
+                    {today.grams !== it.grams && <div className="tiny warn-text">Com corte: {today.grams} g</div>}
+                  </span>
+                  <span className="num muted">{it.grams ? `${it.grams} g` : ''}</span>
+                  <span className="num">{kcal > 0 ? fmtInt(kcal) : ''}</span>
+                </div>
+              );
+            })}
           </div>
           {me.log?.items?.length ? (
             <div className="hint" style={{ marginBottom: 10 }}>

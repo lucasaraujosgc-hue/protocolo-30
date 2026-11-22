@@ -5,7 +5,9 @@
 
 export class ValidationError extends Error {}
 
-const MEAL_IDS = ['cafe', 'lanche', 'almoco', 'pre', 'jantar'];
+const ID_RE = /^[a-z0-9_-]{1,30}$/;
+const FOOD_ID_RE = /^[a-z0-9_-]{1,40}$/;
+const MAX_MEALS = 12;
 const MEAL_STATUS = ['planned', 'more', 'less', 'skipped', 'swapped'];
 const EX_KINDS = ['spinning', 'musculacao', 'outro'];
 const SPIN = ['z2', 'tempo', 'intervalado', 'livre'];
@@ -13,6 +15,7 @@ const EX_STATUS = ['done', 'partial', 'missed'];
 const PLANNED = ['spin', 'lift'];
 const COMP_MODES = ['food', 'mix', 'exercise'];
 const TARGET_KEYS = ['z2', 'tempo', 'intervalado', 'livre', 'musculacao', 'outro'];
+const SOURCES = ['padrao', 'ajustes', 'arquivo', 'migracao'];
 
 export function isDate(s) {
   if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
@@ -111,8 +114,12 @@ function exercise(e) {
 export function sanitizeDay(input) {
   if (!input || typeof input !== 'object') throw new ValidationError('dia inválido');
   const meals = {};
-  for (const id of MEAL_IDS) {
-    if (input.meals && input.meals[id]) meals[id] = mealLog(input.meals[id]);
+  if (input.meals && typeof input.meals === 'object') {
+    for (const [id, log] of Object.entries(input.meals)) {
+      if (!ID_RE.test(id) || !log) continue;
+      if (Object.keys(meals).length >= MAX_MEALS * 2) break;
+      meals[id] = mealLog(log);
+    }
   }
   const steps = num(input.steps, 0, 150000);
   const absorbed = num(input.absorbed, 0, 100000);
@@ -163,43 +170,217 @@ export function sanitizeProfile(p) {
 
 const days = (v) => (Array.isArray(v) ? [...new Set(v.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort() : undefined);
 
+/**
+ * Configurações: hoje só a data de início. Campos do formato antigo (antes do protocolo versionado)
+ * são mantidos, validados, para o app migrar backups antigos.
+ */
 export function sanitizeSettings(s) {
   if (!s || typeof s !== 'object') throw new ValidationError('configurações inválidas');
   if (!isDate(s.startDate)) throw new ValidationError('data de início inválida');
-  const targets = Array.isArray(s.targets)
-    ? s.targets
-        .filter((t) => isDate(t?.from))
-        .slice(0, 50)
-        .map((t) => ({
-          from: t.from,
-          kcal: num(t.kcal, 1200, 6000) ?? 2250,
-          p: num(t.p, 50, 400) ?? 190,
-          c: num(t.c, 0, 800) ?? 240,
-          f: num(t.f, 20, 300) ?? 55,
-          steps: Math.round(num(t.steps, 0, 40000) ?? 10000),
-        }))
-    : [];
-  if (!targets.length) throw new ValidationError('defina ao menos uma meta');
-  const exerciseTargets = {};
-  for (const k of TARGET_KEYS) exerciseTargets[k] = num(s.exerciseTargets?.[k], 0, 3000) ?? 250;
-  const hardDay = Number.isInteger(s.hardDay) && s.hardDay >= 0 && s.hardDay <= 6 ? s.hardDay : 3;
+  const out = { startDate: s.startDate };
+  if (Array.isArray(s.targets)) {
+    const targets = s.targets
+      .filter((t) => isDate(t?.from))
+      .slice(0, 50)
+      .map((t) => ({
+        from: t.from,
+        kcal: num(t.kcal, 1200, 6000) ?? 2250,
+        p: num(t.p, 50, 400) ?? 190,
+        c: num(t.c, 0, 800) ?? 240,
+        f: num(t.f, 20, 300) ?? 55,
+        steps: Math.round(num(t.steps, 0, 40000) ?? 10000),
+      }));
+    if (targets.length) out.targets = targets;
+  }
+  if (s.exerciseTargets && typeof s.exerciseTargets === 'object') {
+    out.exerciseTargets = {};
+    for (const k of TARGET_KEYS) {
+      const v = num(s.exerciseTargets[k], 0, 3000);
+      if (v !== undefined) out.exerciseTargets[k] = v;
+    }
+  }
+  if (typeof s.autoCalibrate === 'boolean') out.autoCalibrate = s.autoCalibrate;
+  const cf = num(s.creditFactor, 0.3, 1);
+  if (cf !== undefined) out.creditFactor = cf;
+  const mfc = num(s.maxFoodCut, 0, 800);
+  if (mfc !== undefined) out.maxFoodCut = mfc;
+  const ff = num(s.foodFloor, 1200, 4000);
+  if (ff !== undefined) out.foodFloor = ff;
+  const mea = num(s.maxExtraActive, 0, 1200);
+  if (mea !== undefined) out.maxExtraActive = mea;
+  for (const k of ['liftDays', 'legDays', 'spinDays']) {
+    const v = days(s[k]);
+    if (v) out[k] = v;
+  }
+  if (Number.isInteger(s.hardDay) && s.hardDay >= 0 && s.hardDay <= 6) out.hardDay = s.hardDay;
+  if (s.intervalsFrom === null || isDate(s.intervalsFrom)) out.intervalsFrom = s.intervalsFrom ?? null;
+  if (isTime(s.spinTime)) out.spinTime = s.spinTime;
+  if (isTime(s.liftTime)) out.liftTime = s.liftTime;
+  return out;
+}
+
+/* --------------------------------------------------------------- protocolo */
+
+function numReq(v, min, max, what) {
+  const n = num(v, min, max);
+  if (n === undefined) throw new ValidationError(`${what} fora da faixa (${min}–${max})`);
+  return n;
+}
+
+function protoItem(it) {
+  if (!it || typeof it !== 'object') throw new ValidationError('item de refeição inválido');
+  const food = typeof it.food === 'string' && FOOD_ID_RE.test(it.food) ? it.food : undefined;
+  const out = clean({
+    food,
+    grams: num(it.grams, 0, 5000),
+    label: str(it.label, 120),
+    free: str(it.free, 120),
+    kcal: num(it.kcal, 0, 5000),
+    p: num(it.p, 0, 5000),
+    c: num(it.c, 0, 5000),
+    f: num(it.f, 0, 5000),
+  });
+  if (!out.food && !out.free && !out.label) throw new ValidationError('item de refeição sem alimento nem nome');
+  return out;
+}
+
+function protoMeal(m) {
+  if (!m || typeof m !== 'object') throw new ValidationError('refeição inválida');
+  if (typeof m.id !== 'string' || !ID_RE.test(m.id)) throw new ValidationError('id de refeição inválido');
+  if (!isTime(m.time)) throw new ValidationError(`horário inválido na refeição ${m.id}`);
+  return clean({
+    id: m.id,
+    name: str(m.name, 60) ?? m.id,
+    short: str(m.short, 24),
+    time: m.time,
+    hint: str(m.hint, 140),
+    items: Array.isArray(m.items) ? m.items.slice(0, 30).map(protoItem) : [],
+  });
+}
+
+function protoFood(f) {
+  if (!f || typeof f !== 'object' || typeof f.id !== 'string' || !FOOD_ID_RE.test(f.id)) throw new ValidationError('alimento inválido');
+  const per = f.per100 && typeof f.per100 === 'object' ? f.per100 : {};
+  const unit =
+    f.unit && typeof f.unit === 'object' && str(f.unit.label, 40) && num(f.unit.grams, 0, 5000) !== undefined
+      ? { label: str(f.unit.label, 40), grams: num(f.unit.grams, 0, 5000) }
+      : undefined;
+  return clean({
+    id: f.id,
+    name: str(f.name, 80) ?? f.id,
+    group: str(f.group, 40),
+    per100: { kcal: num(per.kcal, 0, 950) ?? 0, p: num(per.p, 0, 100) ?? 0, c: num(per.c, 0, 100) ?? 0, f: num(per.f, 0, 100) ?? 0 },
+    unit,
+    source: str(f.source, 60),
+  });
+}
+
+function strList(v, maxItems, maxLen) {
+  return Array.isArray(v) ? v.filter((x) => typeof x === 'string').slice(0, maxItems).map((x) => x.slice(0, maxLen)) : [];
+}
+
+function session(sv) {
+  const o = sv && typeof sv === 'object' ? sv : {};
   return {
-    startDate: s.startDate,
-    targets,
-    exerciseTargets,
-    autoCalibrate: s.autoCalibrate !== false,
-    creditFactor: num(s.creditFactor, 0.3, 1) ?? 0.75,
-    maxFoodCut: num(s.maxFoodCut, 0, 800) ?? 300,
-    foodFloor: num(s.foodFloor, 1200, 4000) ?? 1950,
-    maxExtraActive: num(s.maxExtraActive, 0, 1200) ?? 300,
-    liftDays: days(s.liftDays) ?? [1, 2, 3, 4, 5],
-    legDays: days(s.legDays) ?? [1, 4],
-    spinDays: days(s.spinDays) ?? [2, 3, 5, 6],
-    hardDay,
-    intervalsFrom: isDate(s.intervalsFrom) ? s.intervalsFrom : null,
-    spinTime: isTime(s.spinTime) ? s.spinTime : '05:30',
-    liftTime: isTime(s.liftTime) ? s.liftTime : '17:00',
+    name: str(o.name, 40) ?? 'Sessão',
+    zone: str(o.zone, 40) ?? '',
+    hr: str(o.hr, 40) ?? '',
+    rpe: str(o.rpe, 80) ?? '',
+    blocks: strList(o.blocks, 12, 140),
   };
+}
+
+function training(t) {
+  if (!t || typeof t !== 'object') throw new ValidationError('treino do protocolo inválido');
+  const exerciseTargets = {};
+  for (const k of TARGET_KEYS) exerciseTargets[k] = numReq(t.exerciseTargets?.[k], 0, 3000, `meta de treino ${k}`);
+  const sessions = {};
+  for (const k of SPIN) sessions[k] = session(t.sessions?.[k]);
+  const zones = Array.isArray(t.zones)
+    ? t.zones
+        .filter((z) => z && Number.isInteger(z.z) && z.z >= 1 && z.z <= 9)
+        .slice(0, 9)
+        .map((z) => ({ z: z.z, range: str(z.range, 24) ?? '', use: str(z.use, 80) ?? '' }))
+    : [];
+  if (!(t.intervalsFrom === null || t.intervalsFrom === undefined || isDate(t.intervalsFrom))) throw new ValidationError('data do intervalado inválida');
+  if (!isTime(t.spinTime) || !isTime(t.liftTime)) throw new ValidationError('horário de treino inválido');
+  if (!(Number.isInteger(t.hardDay) && t.hardDay >= 0 && t.hardDay <= 6)) throw new ValidationError('dia da sessão forte inválido');
+  return {
+    liftDays: days(t.liftDays) ?? [],
+    legDays: days(t.legDays) ?? [],
+    spinDays: days(t.spinDays) ?? [],
+    hardDay: t.hardDay,
+    spinTime: t.spinTime,
+    liftTime: t.liftTime,
+    intervalsFrom: t.intervalsFrom ?? null,
+    exerciseTargets,
+    sessions,
+    zones,
+    liftDetail: str(t.liftDetail, 140) ?? '',
+  };
+}
+
+function subsList(v) {
+  return Array.isArray(v)
+    ? v
+        .filter((r) => r && typeof r.food === 'string')
+        .slice(0, 40)
+        .map((r) => ({ food: r.food.slice(0, 80), qty: typeof r.qty === 'string' ? r.qty.slice(0, 40) : '', kcal: num(r.kcal, 0, 5000) ?? 0 }))
+    : [];
+}
+
+export function sanitizeProtocol(p) {
+  if (!p || typeof p !== 'object') throw new ValidationError('protocolo inválido');
+  if (!isDate(p.from)) throw new ValidationError('data de início da versão inválida');
+  const t = p.targets ?? {};
+  const meals = Array.isArray(p.meals) ? p.meals.slice(0, MAX_MEALS).map(protoMeal) : [];
+  if (!meals.length) throw new ValidationError('o protocolo precisa de pelo menos uma refeição');
+  if (new Set(meals.map((m) => m.id)).size !== meals.length) throw new ValidationError('ids de refeição repetidos');
+  const b = p.bank ?? {};
+  return clean({
+    id: typeof p.id === 'string' && /^[\w-]{1,40}$/.test(p.id) ? p.id : `p${Date.now().toString(36)}`,
+    name: str(p.name, 80) ?? 'Protocolo',
+    from: p.from,
+    createdAt: str(p.createdAt, 40) ?? new Date().toISOString(),
+    source: oneOf(p.source, SOURCES) ?? 'arquivo',
+    notes: str(p.notes, 3000),
+    targets: {
+      kcal: numReq(t.kcal, 1200, 6000, 'meta de calorias'),
+      p: numReq(t.p, 50, 400, 'meta de proteína'),
+      c: numReq(t.c, 0, 800, 'meta de carboidrato'),
+      f: numReq(t.f, 20, 300, 'meta de gordura'),
+      steps: Math.round(numReq(t.steps, 0, 40000, 'meta de passos')),
+    },
+    meals,
+    foods: Array.isArray(p.foods) ? p.foods.slice(0, 200).map(protoFood) : [],
+    training: training(p.training),
+    bank: {
+      creditFactor: numReq(b.creditFactor, 0.3, 1, 'fator de crédito'),
+      maxFoodCut: numReq(b.maxFoodCut, 0, 800, 'corte máximo de comida'),
+      foodFloor: numReq(b.foodFloor, 1200, 4000, 'piso de calorias'),
+      maxExtraActive: numReq(b.maxExtraActive, 0, 1200, 'atividade extra máxima'),
+      autoCalibrate: b.autoCalibrate !== false,
+    },
+    reductionLadder: Array.isArray(p.reductionLadder)
+      ? p.reductionLadder
+          .filter((x) => x && ID_RE.test(String(x.meal)) && FOOD_ID_RE.test(String(x.food)))
+          .slice(0, 40)
+          .map((x) => ({ meal: x.meal, food: x.food, from: num(x.from, 0, 5000) ?? 0, to: num(x.to, 0, 5000) ?? 0 }))
+      : [],
+    substitutions: { carbs: subsList(p.substitutions?.carbs), proteins: subsList(p.substitutions?.proteins) },
+  });
+}
+
+/** Lista de versões: uma por data de início (a última enviada vence), em ordem de data. */
+export function sanitizeProtocols(list) {
+  if (!Array.isArray(list) || !list.length) throw new ValidationError('envie ao menos uma versão do protocolo');
+  if (list.length > 100) throw new ValidationError('versões demais (máximo de 100)');
+  const byFrom = new Map();
+  for (const raw of list) {
+    const p = sanitizeProtocol(raw);
+    byFrom.set(p.from, p);
+  }
+  return [...byFrom.values()].sort((a, b) => a.from.localeCompare(b.from));
 }
 
 export function sanitizeCompensation(c) {
@@ -223,10 +404,12 @@ export function sanitizeCompensation(c) {
 /** Importação de backup: valida tudo, campo a campo. */
 export function sanitizeState(s) {
   if (!s || typeof s !== 'object') throw new ValidationError('arquivo inválido');
+  if (!('days' in s) && !('settings' in s) && !('profile' in s)) throw new ValidationError('isso não parece um backup do Protocolo 30');
   const out = {
-    version: 1,
+    version: 2,
     profile: s.profile ? sanitizeProfile(s.profile) : null,
     settings: s.settings ? sanitizeSettings(s.settings) : null,
+    protocols: Array.isArray(s.protocols) && s.protocols.length ? sanitizeProtocols(s.protocols) : [],
     days: {},
     measurements: [],
     compensation: s.compensation ? sanitizeCompensation(s.compensation) : null,

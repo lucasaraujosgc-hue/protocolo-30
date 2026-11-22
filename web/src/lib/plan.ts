@@ -1,24 +1,20 @@
-import { FOOD_BY_ID, foodTotals, round1 } from './foods';
-import type { MealId, Totals } from './types';
+import { foodIndex, foodTotals, round1, type Food } from './foods';
+import type { LadderStep, MealId, ProtoItem, ProtoMeal, Protocol, SubstitutionRow, Totals } from './types';
 
-export interface PlanItem {
-  food?: string;
-  grams?: number;
-  label?: string;
-  free?: string;
-}
+export type PlanItem = ProtoItem;
 
+/** Refeição já resolvida (com nome curto e descrição preenchidos). */
 export interface Meal {
   id: MealId;
   name: string;
   short: string;
   time: string;
   hint: string;
-  items: PlanItem[];
+  items: ProtoItem[];
 }
 
-/** Cardápio do plano (2.250 kcal · ~197 g P · ~241 g C · ~56 g G). Pesos de alimentos prontos. */
-export const MEALS: Meal[] = [
+/** Cardápio padrão do plano (2.250 kcal · ~197 g P · ~240 g C · ~56 g G). Pesos de alimentos prontos. */
+export const DEFAULT_MEALS: ProtoMeal[] = [
   {
     id: 'cafe',
     name: 'Café da manhã',
@@ -89,40 +85,8 @@ export const MEALS: Meal[] = [
   },
 ];
 
-export const MEAL_BY_ID: Record<MealId, Meal> = Object.fromEntries(MEALS.map((m) => [m.id, m])) as Record<MealId, Meal>;
-
-export function itemLabel(it: PlanItem): string {
-  if (it.free) return it.free;
-  return it.label ?? FOOD_BY_ID[it.food!].name;
-}
-
-export function itemTotals(it: PlanItem): Totals {
-  if (!it.food || !it.grams) return { kcal: 0, p: 0, c: 0, f: 0 };
-  return foodTotals(FOOD_BY_ID[it.food], it.grams);
-}
-
-export function mealTotals(meal: Meal): Totals {
-  return meal.items.reduce(
-    (acc, it) => {
-      const t = itemTotals(it);
-      return { kcal: acc.kcal + t.kcal, p: acc.p + t.p, c: acc.c + t.c, f: acc.f + t.f };
-    },
-    { kcal: 0, p: 0, c: 0, f: 0 },
-  );
-}
-
-export const PLAN_TOTALS: Totals = MEALS.reduce(
-  (acc, m) => {
-    const t = mealTotals(m);
-    return { kcal: acc.kcal + t.kcal, p: acc.p + t.p, c: acc.c + t.c, f: acc.f + t.f };
-  },
-  { kcal: 0, p: 0, c: 0, f: 0 },
-);
-
-export const PLAN_KCAL = Math.round(PLAN_TOTALS.kcal);
-
 /** Ordem de corte quando é preciso comer menos: preserva proteína e carboidrato do pré-treino. */
-export const REDUCTION_LADDER: { meal: MealId; food: string; from: number; to: number }[] = [
+export const DEFAULT_LADDER: LadderStep[] = [
   { meal: 'lanche', food: 'pasta_amendoim', from: 15, to: 0 },
   { meal: 'almoco', food: 'azeite', from: 5, to: 0 },
   { meal: 'jantar', food: 'azeite', from: 5, to: 0 },
@@ -133,61 +97,7 @@ export const REDUCTION_LADDER: { meal: MealId; food: string; from: number; to: n
   { meal: 'almoco', food: 'arroz', from: 60, to: 0 },
 ];
 
-export interface ReductionStep {
-  meal: MealId;
-  mealName: string;
-  food: string;
-  foodName: string;
-  fromG: number;
-  toG: number;
-  kcal: number;
-}
-
-/** Sugere cortes concretos (em gramas) para reduzir `kcal` do dia. */
-export function reductionPlan(kcal: number): { steps: ReductionStep[]; total: number } {
-  const steps: ReductionStep[] = [];
-  let need = Math.max(0, kcal);
-  // Gramas já cortadas por (refeição, alimento) para encadear degraus do mesmo alimento.
-  const current: Record<string, number> = {};
-  for (const step of REDUCTION_LADDER) {
-    if (need <= 0.5) break;
-    const food = FOOD_BY_ID[step.food];
-    const key = `${step.meal}:${step.food}`;
-    const start = current[key] ?? step.from;
-    const kcalPerG = food.per100.kcal / 100;
-    const available = (start - step.to) * kcalPerG;
-    if (available <= 0) continue;
-    let gramsCut: number;
-    if (available <= need) {
-      gramsCut = start - step.to;
-    } else {
-      gramsCut = Math.min(start - step.to, Math.ceil(need / kcalPerG / 5) * 5);
-    }
-    const toG = start - gramsCut;
-    const cutKcal = gramsCut * kcalPerG;
-    current[key] = toG;
-    need -= cutKcal;
-    const existing = steps.find((s) => s.meal === step.meal && s.food === step.food);
-    if (existing) {
-      existing.toG = toG;
-      existing.kcal += cutKcal;
-    } else {
-      steps.push({
-        meal: step.meal,
-        mealName: MEAL_BY_ID[step.meal].name,
-        food: step.food,
-        foodName: FOOD_BY_ID[step.food].name,
-        fromG: start,
-        toG,
-        kcal: cutKcal,
-      });
-    }
-  }
-  const total = steps.reduce((a, s) => a + s.kcal, 0);
-  return { steps: steps.map((s) => ({ ...s, kcal: round1(s.kcal) })), total: round1(total) };
-}
-
-export const SUBSTITUTIONS = {
+export const DEFAULT_SUBSTITUTIONS: { carbs: SubstitutionRow[]; proteins: SubstitutionRow[] } = {
   carbs: [
     { food: 'Arroz branco cozido', qty: '105 g', kcal: 135 },
     { food: 'Batata inglesa cozida', qty: '250 g', kcal: 130 },
@@ -207,3 +117,114 @@ export const SUBSTITUTIONS = {
     { food: 'Ovos inteiros', qty: '4–5 un. (225 g)', kcal: 330 },
   ],
 };
+
+const ZERO: Totals = { kcal: 0, p: 0, c: 0, f: 0 };
+const add = (a: Totals, b: Totals): Totals => ({ kcal: a.kcal + b.kcal, p: a.p + b.p, c: a.c + b.c, f: a.f + b.f });
+
+/** Calorias e macros de um item do cardápio. */
+export function itemTotalsWith(foods: Record<string, Food>, it: ProtoItem): Totals {
+  if (it.food && it.grams && foods[it.food]) return foodTotals(foods[it.food], it.grams);
+  if (typeof it.kcal === 'number') return { kcal: it.kcal, p: it.p ?? 0, c: it.c ?? 0, f: it.f ?? 0 };
+  return ZERO;
+}
+
+export function mealsTotalsWith(foods: Record<string, Food>, meals: ProtoMeal[]): Totals {
+  return meals.reduce((acc, m) => m.items.reduce((a, it) => add(a, itemTotalsWith(foods, it)), acc), ZERO);
+}
+
+/** Totais do cardápio padrão (usado para as metas padrão). */
+export const DEFAULT_TOTALS: Totals = mealsTotalsWith(foodIndex([]), DEFAULT_MEALS);
+
+/** Protocolo já resolvido para uso nas telas e nos cálculos. */
+export interface Plan {
+  protocol: Protocol;
+  meals: Meal[];
+  mealById: Record<MealId, Meal>;
+  foods: Record<string, Food>;
+  totals: Totals;
+  kcal: number;
+}
+
+const cache = new WeakMap<Protocol, Plan>();
+
+export function planOf(protocol: Protocol): Plan {
+  const hit = cache.get(protocol);
+  if (hit) return hit;
+  const foods = foodIndex(protocol.foods);
+  const meals: Meal[] = [...protocol.meals]
+    .sort((a, b) => a.time.localeCompare(b.time))
+    .map((m) => ({ id: m.id, name: m.name, short: m.short || m.name.split(' ')[0], time: m.time, hint: m.hint ?? '', items: m.items }));
+  const totals = mealsTotalsWith(foods, meals);
+  const plan: Plan = {
+    protocol,
+    meals,
+    mealById: Object.fromEntries(meals.map((m) => [m.id, m])),
+    foods,
+    totals,
+    kcal: Math.round(totals.kcal),
+  };
+  cache.set(protocol, plan);
+  return plan;
+}
+
+export function itemLabel(plan: Plan, it: ProtoItem): string {
+  if (it.free) return it.free;
+  if (it.label) return it.label;
+  if (it.food && plan.foods[it.food]) return plan.foods[it.food].name;
+  return it.food ?? 'Item';
+}
+
+export function itemTotals(plan: Plan, it: ProtoItem): Totals {
+  return itemTotalsWith(plan.foods, it);
+}
+
+export function mealTotals(plan: Plan, meal: Meal): Totals {
+  return meal.items.reduce((acc, it) => add(acc, itemTotals(plan, it)), ZERO);
+}
+
+export interface ReductionStep {
+  meal: MealId;
+  mealName: string;
+  food: string;
+  foodName: string;
+  fromG: number;
+  toG: number;
+  kcal: number;
+}
+
+/**
+ * Sugere cortes concretos (em gramas) para reduzir `kcal` do dia, seguindo a ordem de cortes do protocolo.
+ * Cada passo corta no máximo (from − to) gramas e nunca deixa o item abaixo de `to`; as gramas mostradas
+ * são as do prato real (o cardápio pode ter porções diferentes das da ordem de cortes).
+ */
+export function reductionPlan(plan: Plan, kcal: number): { steps: ReductionStep[]; total: number } {
+  const steps: ReductionStep[] = [];
+  let need = Math.max(0, kcal);
+  const current: Record<string, number> = {};
+  for (const step of plan.protocol.reductionLadder) {
+    if (need <= 0.5) break;
+    const meal = plan.mealById[step.meal];
+    const item = meal?.items.find((i) => i.food === step.food && i.grams);
+    const food = plan.foods[step.food];
+    if (!meal || !item || !food || food.per100.kcal <= 0) continue;
+    const key = `${step.meal}:${step.food}`;
+    const cur = current[key] ?? item.grams!;
+    const maxCut = Math.max(0, Math.min(step.from - step.to, cur - step.to));
+    if (maxCut <= 0) continue;
+    const kcalPerG = food.per100.kcal / 100;
+    const gramsCut = maxCut * kcalPerG <= need ? maxCut : Math.min(maxCut, Math.ceil(need / kcalPerG / 5) * 5);
+    const toG = cur - gramsCut;
+    const cutKcal = gramsCut * kcalPerG;
+    current[key] = toG;
+    need -= cutKcal;
+    const existing = steps.find((s) => s.meal === step.meal && s.food === step.food);
+    if (existing) {
+      existing.toG = toG;
+      existing.kcal += cutKcal;
+    } else {
+      steps.push({ meal: step.meal, mealName: meal.name, food: step.food, foodName: food.name, fromG: item.grams!, toG, kcal: cutKcal });
+    }
+  }
+  const total = steps.reduce((a, s) => a + s.kcal, 0);
+  return { steps: steps.map((s) => ({ ...s, kcal: round1(s.kcal) })), total: round1(total) };
+}

@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { targetKeyOf, uid } from '../lib/engine';
+import { exerciseTargets, PARTIAL_SHARE, protoAt, targetKeyOf, uid } from '../lib/engine';
 import { fmtInt } from '../lib/format';
-import { SPIN_TEMPLATES, type PlannedSession } from '../lib/schedule';
+import type { PlannedSession } from '../lib/schedule';
 import { useStore } from '../lib/store';
 import type { ExerciseKind, ExerciseLog, ExerciseStatus, SpinTemplate } from '../lib/types';
+import { SPIN_KEYS } from '../lib/types';
 import { Delta, NumberField, Segmented, Sheet } from './ui';
 
 const RPE_TEXT = ['Repouso', 'Muito leve', 'Leve', 'Leve-moderado', 'Moderado', 'Um pouco forte', 'Forte', 'Bem forte', 'Muito forte', 'Quase máximo', 'Máximo'];
@@ -19,7 +20,11 @@ export function ExerciseSheet({
   log?: ExerciseLog;
   onClose: () => void;
 }) {
-  const { saveDay, targets, state, toast } = useStore();
+  const { saveDay, samples, state, toast } = useStore();
+  // Metas e sessões da versão do protocolo em vigor no dia do treino.
+  const proto = protoAt(state, date);
+  const sessions = proto.training.sessions;
+  const targets = exerciseTargets(proto, samples);
   const [kind, setKind] = useState<ExerciseKind>(log?.kind ?? planned?.kind ?? 'spinning');
   const [template, setTemplate] = useState<SpinTemplate>(log?.template ?? planned?.template ?? 'z2');
   const [status, setStatus] = useState<ExerciseStatus>(log?.status ?? 'done');
@@ -32,10 +37,11 @@ export function ExerciseSheet({
 
   const key = targetKeyOf({ kind, template: kind === 'spinning' ? template : undefined });
   const target = targets[key];
-  const cf = state.settings.creditFactor;
+  const cf = proto.bank.creditFactor;
   let dev = 0;
   if (planned) {
-    dev = status === 'missed' ? -target.value : (active ?? target.value) - target.value;
+    const assumed = status === 'partial' ? target.value * PARTIAL_SHARE : target.value;
+    dev = status === 'missed' ? -target.value : (active ?? assumed) - target.value;
   } else {
     dev = active ?? 0;
   }
@@ -102,9 +108,9 @@ export function ExerciseSheet({
 
         {kind === 'spinning' && !planned && (
           <div className="chips wrap">
-            {(Object.keys(SPIN_TEMPLATES) as SpinTemplate[]).map((t) => (
+            {SPIN_KEYS.map((t: SpinTemplate) => (
               <button key={t} className={`chip ${template === t ? 'on' : ''}`} onClick={() => setTemplate(t)}>
-                {SPIN_TEMPLATES[t].name}
+                {sessions[t].name}
               </button>
             ))}
           </div>
@@ -112,7 +118,7 @@ export function ExerciseSheet({
 
         {planned?.kind === 'spinning' && planned.template && (
           <div className="hint">
-            {SPIN_TEMPLATES[planned.template].blocks.join(' → ')} · {SPIN_TEMPLATES[planned.template].rpe}
+            {sessions[planned.template].blocks.join(' → ')} · {sessions[planned.template].rpe}
           </div>
         )}
 
@@ -124,7 +130,10 @@ export function ExerciseSheet({
               <NumberField label="Duração" value={minutes} onChange={setMinutes} suffix="min" decimals={false} />
               <NumberField label="FC média" value={hr} onChange={setHr} suffix="bpm" decimals={false} />
             </div>
-            <div className="tiny muted">Copie do resumo do treino no Apple Watch (app Fitness no iPhone). O banco usa as calorias ativas.</div>
+            <div className="tiny muted">
+              Copie do resumo do treino no Apple Watch (app Fitness no iPhone). O banco usa as calorias ativas
+              {planned && status === 'partial' && active === undefined ? '; sem elas, "Fiz parte" conta como metade da meta' : ''}.
+            </div>
             <div className="field">
               <span>
                 Esforço percebido (RPE): <b className="cyan">{rpe}</b> · {RPE_TEXT[rpe]}

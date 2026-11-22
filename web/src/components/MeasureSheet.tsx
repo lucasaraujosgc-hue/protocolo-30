@@ -7,6 +7,29 @@ import { useStore } from '../lib/store';
 import type { Measurement, MeasureKey } from '../lib/types';
 import { NumberField, Sheet, Switch } from './ui';
 
+/** Mesmas faixas que o servidor aceita: valor fora delas seria descartado em silêncio. */
+export const RANGES = {
+  weight: [30, 350],
+  waistNavel: [40, 250],
+  waistNarrow: [40, 250],
+  neck: [20, 80],
+  chest: [50, 250],
+  hip: [50, 250],
+  armRelaxed: [15, 80],
+  armFlexed: [15, 80],
+  thigh: [25, 120],
+  calf: [20, 80],
+  restingHr: [30, 150],
+  bpSys: [70, 260],
+  bpDia: [40, 160],
+} as const;
+
+const LABEL: Record<keyof typeof RANGES, string> = {
+  ...(Object.fromEntries(MEASURES.map((x) => [x.key, x.short.toLowerCase()])) as Record<MeasureKey, string>),
+  bpSys: 'pressão máxima',
+  bpDia: 'pressão mínima',
+};
+
 export function MeasureSheet({ initial, onClose }: { initial?: Measurement; onClose: () => void }) {
   const { today, saveMeasurement, deleteMeasurement } = useStore();
   const [m, setM] = useState<Measurement>(
@@ -22,6 +45,10 @@ export function MeasureSheet({ initial, onClose }: { initial?: Measurement; onCl
   const set = (k: keyof Measurement, v: unknown) => setM((x) => ({ ...x, [k]: v }));
   const groups = ['Peso', 'Tronco', 'Membros', 'Saúde'] as const;
   const hasAny = MEASURES.some((x) => typeof m[x.key] === 'number') || m.bpSys !== undefined;
+  const invalid = (Object.keys(RANGES) as (keyof typeof RANGES)[]).filter((k) => {
+    const v = m[k];
+    return typeof v === 'number' && (v < RANGES[k][0] || v > RANGES[k][1]);
+  });
 
   return (
     <Sheet title={initial ? 'Editar medição' : 'Nova medição'} onClose={onClose}>
@@ -29,11 +56,11 @@ export function MeasureSheet({ initial, onClose }: { initial?: Measurement; onCl
         <div className="grid2">
           <label className="field">
             <span>Data</span>
-            <input className="input" type="date" value={m.date} max={today} onChange={(e) => set('date', e.target.value)} />
+            <input className="input" type="date" value={m.date} max={today} onChange={(e) => e.target.value && set('date', e.target.value)} />
           </label>
           <label className="field">
             <span>Hora</span>
-            <input className="input" type="time" value={m.time} onChange={(e) => set('time', e.target.value)} />
+            <input className="input" type="time" value={m.time} onChange={(e) => e.target.value && set('time', e.target.value)} />
           </label>
         </div>
         <Switch
@@ -84,9 +111,14 @@ export function MeasureSheet({ initial, onClose }: { initial?: Measurement; onCl
           <input className="input" value={m.note ?? ''} onChange={(e) => set('note', e.target.value || undefined)} />
         </label>
 
+        {invalid.length > 0 && (
+          <div className="hint bad">
+            Confira {invalid.map((k) => `${LABEL[k]} (${RANGES[k][0]}–${RANGES[k][1]})`).join(', ')}: valor fora da faixa esperada.
+          </div>
+        )}
         <button
           className="btn primary block"
-          disabled={!hasAny}
+          disabled={!hasAny || invalid.length > 0}
           onClick={async () => {
             if (await saveMeasurement(m)) onClose();
           }}

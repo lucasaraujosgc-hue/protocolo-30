@@ -1,59 +1,9 @@
 import { addDays, diffDays, weekday } from './dates';
-import { PLAN_TOTALS, PLAN_KCAL } from './plan';
-import type { ExerciseKind, PlannedKey, Settings, SpinTemplate, TargetKey } from './types';
+import type { ExerciseKind, HrZone, PlannedKey, SessionTemplate, SpinTemplate, TargetKey, Training } from './types';
 
 export const DEFAULT_START = '2026-11-23';
 
-export function defaultSettings(startDate = DEFAULT_START): Settings {
-  return {
-    startDate,
-    targets: [
-      {
-        from: startDate,
-        kcal: PLAN_KCAL,
-        p: Math.round(PLAN_TOTALS.p),
-        c: Math.round(PLAN_TOTALS.c),
-        f: Math.round(PLAN_TOTALS.f),
-        steps: 10000,
-      },
-    ],
-    exerciseTargets: { z2: 250, tempo: 280, intervalado: 300, livre: 250, musculacao: 280, outro: 200 },
-    autoCalibrate: true,
-    creditFactor: 0.75,
-    maxFoodCut: 300,
-    foodFloor: 1950,
-    maxExtraActive: 300,
-    liftDays: [1, 2, 3, 4, 5],
-    legDays: [1, 4],
-    spinDays: [2, 3, 5, 6],
-    hardDay: 3,
-    intervalsFrom: null,
-    spinTime: '05:30',
-    liftTime: '17:00',
-  };
-}
-
-/** Junta configurações salvas com os padrões (campos novos ganham valor padrão). */
-export function withDefaults(raw: Partial<Settings> | null | undefined): Settings {
-  const base = defaultSettings(raw?.startDate ?? DEFAULT_START);
-  if (!raw) return base;
-  return {
-    ...base,
-    ...raw,
-    targets: raw.targets && raw.targets.length ? raw.targets : base.targets,
-    exerciseTargets: { ...base.exerciseTargets, ...(raw.exerciseTargets ?? {}) },
-  } as Settings;
-}
-
-export interface SpinTemplateInfo {
-  name: string;
-  zone: string;
-  hr: string;
-  rpe: string;
-  blocks: string[];
-}
-
-export const SPIN_TEMPLATES: Record<SpinTemplate, SpinTemplateInfo> = {
+export const DEFAULT_SESSIONS: Record<SpinTemplate, SessionTemplate> = {
   z2: {
     name: 'Z2 30',
     zone: 'Zona 2',
@@ -84,13 +34,31 @@ export const SPIN_TEMPLATES: Record<SpinTemplate, SpinTemplateInfo> = {
   },
 };
 
-export const HR_ZONES = [
-  { z: 1, range: 'até 109', use: 'Aquecimento e recuperação', color: 'var(--z1)' },
-  { z: 2, range: '110–130', use: 'Base (Z2 30)', color: 'var(--z2)' },
-  { z: 3, range: '131–144', use: 'Blocos do Tempo 3x4', color: 'var(--z3)' },
-  { z: 4, range: '145–155', use: 'Tiros do Intervalado 5x2', color: 'var(--z4)' },
-  { z: 5, range: '156+', use: 'Não usar neste plano', color: 'var(--z5)' },
+export const DEFAULT_ZONES: HrZone[] = [
+  { z: 1, range: 'até 109', use: 'Aquecimento e recuperação' },
+  { z: 2, range: '110–130', use: 'Base (Z2 30)' },
+  { z: 3, range: '131–144', use: 'Blocos do Tempo 3x4' },
+  { z: 4, range: '145–155', use: 'Tiros do Intervalado 5x2' },
+  { z: 5, range: '156+', use: 'Não usar neste plano' },
 ];
+
+export const ZONE_COLORS = ['var(--z1)', 'var(--z2)', 'var(--z3)', 'var(--z4)', 'var(--z5)'];
+
+export function defaultTraining(): Training {
+  return {
+    liftDays: [1, 2, 3, 4, 5],
+    legDays: [1, 4],
+    spinDays: [2, 3, 5, 6],
+    hardDay: 3,
+    spinTime: '05:30',
+    liftTime: '17:00',
+    intervalsFrom: null,
+    exerciseTargets: { z2: 250, tempo: 280, intervalado: 300, livre: 250, musculacao: 280, outro: 200 },
+    sessions: structuredClone(DEFAULT_SESSIONS),
+    zones: structuredClone(DEFAULT_ZONES),
+    liftDetail: 'Com o personal · progressão de carga',
+  };
+}
 
 export interface PlannedSession {
   key: PlannedKey;
@@ -103,37 +71,37 @@ export interface PlannedSession {
   isLegDay?: boolean;
 }
 
-export function intervalsReleased(settings: Settings, date: string): boolean {
-  return !!settings.intervalsFrom && date >= settings.intervalsFrom;
+export function intervalsReleased(training: Training, date: string): boolean {
+  return !!training.intervalsFrom && date >= training.intervalsFrom;
 }
 
-export function plannedSessions(settings: Settings, date: string): PlannedSession[] {
-  if (diffDays(date, settings.startDate) < 0) return [];
+export function plannedSessions(training: Training, startDate: string, date: string): PlannedSession[] {
+  if (diffDays(date, startDate) < 0) return [];
   const dow = weekday(date);
   const out: PlannedSession[] = [];
-  if (settings.spinDays.includes(dow)) {
+  if (training.spinDays.includes(dow)) {
     let template: SpinTemplate = 'z2';
-    if (dow === settings.hardDay) template = intervalsReleased(settings, date) ? 'intervalado' : 'tempo';
-    const info = SPIN_TEMPLATES[template];
+    if (dow === training.hardDay) template = intervalsReleased(training, date) ? 'intervalado' : 'tempo';
+    const info = training.sessions[template] ?? DEFAULT_SESSIONS[template];
     out.push({
       key: 'spin',
       kind: 'spinning',
       template,
       targetKey: template,
       label: `Spinning · ${info.name}`,
-      time: settings.spinTime,
+      time: training.spinTime,
       detail: `${info.zone} · ${info.hr}`,
     });
   }
-  if (settings.liftDays.includes(dow)) {
-    const leg = settings.legDays.includes(dow);
+  if (training.liftDays.includes(dow)) {
+    const leg = training.legDays.includes(dow);
     out.push({
       key: 'lift',
       kind: 'musculacao',
       targetKey: 'musculacao',
       label: leg ? 'Musculação · pernas' : 'Musculação',
-      time: settings.liftTime,
-      detail: 'Com o personal · progressão de carga',
+      time: training.liftTime,
+      detail: training.liftDetail,
       isLegDay: leg,
     });
   }
@@ -141,27 +109,27 @@ export function plannedSessions(settings: Settings, date: string): PlannedSessio
 }
 
 /** Próxima data (depois de `date`) que cai no dia da sessão forte. */
-export function nextHardDay(settings: Settings, date: string): string {
+export function nextHardDay(training: Training, date: string): string {
   let d = addDays(date, 1);
   for (let i = 0; i < 7; i++) {
-    if (weekday(d) === settings.hardDay) return d;
+    if (weekday(d) === training.hardDay) return d;
     d = addDays(d, 1);
   }
   return d;
 }
 
 /** Avisos quando a semana configurada quebra as regras do plano. */
-export function scheduleWarnings(settings: Settings): string[] {
+export function scheduleWarnings(training: Training): string[] {
   const w: string[] = [];
-  for (const leg of settings.legDays) {
-    if (settings.spinDays.includes(leg)) w.push('Há spinning na manhã de um dia de perna.');
+  for (const leg of training.legDays) {
+    if (training.spinDays.includes(leg)) w.push('Há spinning na manhã de um dia de perna.');
     const after = (leg + 1) % 7;
-    if (after === settings.hardDay && settings.spinDays.includes(after)) {
+    if (after === training.hardDay && training.spinDays.includes(after)) {
       w.push('A sessão forte cai no dia seguinte ao treino de perna.');
     }
-    if (settings.hardDay === leg) w.push('A sessão forte cai no dia de perna.');
+    if (training.hardDay === leg) w.push('A sessão forte cai no dia de perna.');
   }
-  if (!settings.spinDays.includes(settings.hardDay)) w.push('O dia da sessão forte não está entre os dias de spinning.');
-  if (settings.spinDays.length > 5) w.push('Mais de 5 sessões de spinning por semana atrapalham a recuperação.');
+  if (!training.spinDays.includes(training.hardDay)) w.push('O dia da sessão forte não está entre os dias de spinning.');
+  if (training.spinDays.length > 5) w.push('Mais de 5 sessões de spinning por semana atrapalham a recuperação.');
   return [...new Set(w)];
 }

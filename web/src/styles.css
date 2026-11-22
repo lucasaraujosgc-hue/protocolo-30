@@ -1257,3 +1257,8 @@ details.card > summary::-webkit-details-marker {
     transition: none !important;
   }
 }
+
+.hint.bad {
+  background: rgba(229, 101, 94, 0.1);
+  color: #f0a29d;
+}

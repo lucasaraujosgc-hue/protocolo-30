@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { addDays, diffDays, weekday } from './dates';
 import {
   bankSummary,
+  calibrationSamples,
+  compensationToday,
   composition,
   currentMealIndex,
+  dayCuts,
   emptyDay,
   evalDay,
   exerciseTargets,
@@ -16,17 +19,22 @@ import {
   rfm,
 } from './engine';
 import { PRESET_BY_ID, presetItem } from './foods';
-import { MEAL_BY_ID, PLAN_KCAL, PLAN_TOTALS, reductionPlan } from './plan';
-import { defaultSettings, plannedSessions, scheduleWarnings } from './schedule';
-import type { AppState, DayLog, Measurement } from './types';
+import { planOf, reductionPlan } from './plan';
+import { defaultProtocol, upsertVersion } from './protocol';
+import { defaultTraining, plannedSessions, scheduleWarnings } from './schedule';
+import type { AppState, DayLog, Measurement, Protocol } from './types';
 
 const START = '2026-11-23';
+const PROTO = defaultProtocol(START);
+const PLAN = planOf(PROTO);
+const MEAL = PLAN.mealById;
 
 function baseState(): AppState {
   return {
-    version: 1,
+    version: 2,
     profile: { heightCm: 186, age: 31, sex: 'M' },
-    settings: defaultSettings(START),
+    settings: { startDate: START },
+    protocols: [defaultProtocol(START)],
     days: {},
     measurements: [{ id: 'm0', date: START, time: '06:00', fasting: true, weight: 106, waistNavel: 106 }],
     compensation: null,
@@ -50,14 +58,15 @@ describe('datas', () => {
 
 describe('plano alimentar', () => {
   it('soma as calorias e macros do cardápio', () => {
-    expect(PLAN_KCAL).toBe(2253);
-    expect(Math.round(PLAN_TOTALS.p)).toBe(197);
-    expect(Math.round(PLAN_TOTALS.c)).toBe(240);
-    expect(Math.round(PLAN_TOTALS.f)).toBe(56);
+    expect(PLAN.kcal).toBe(2253);
+    expect(PROTO.targets.kcal).toBe(2253);
+    expect(Math.round(PLAN.totals.p)).toBe(197);
+    expect(Math.round(PLAN.totals.c)).toBe(240);
+    expect(Math.round(PLAN.totals.f)).toBe(56);
   });
 
   it('sugere cortes que preservam a proteína', () => {
-    const r = reductionPlan(300);
+    const r = reductionPlan(PLAN, 300);
     expect(r.total).toBeGreaterThanOrEqual(299);
     expect(r.total).toBeLessThan(320);
     expect(r.steps[0].food).toBe('pasta_amendoim');
@@ -66,17 +75,17 @@ describe('plano alimentar', () => {
 });
 
 describe('agenda de treinos', () => {
-  const s = defaultSettings(START);
+  const s = defaultTraining();
   it('segue a semana-padrão', () => {
-    expect(plannedSessions(s, START).map((x) => x.key)).toEqual(['lift']);
-    expect(plannedSessions(s, '2026-11-25').map((x) => x.template)).toContain('tempo');
-    expect(plannedSessions(s, '2026-11-29')).toEqual([]);
-    expect(plannedSessions(s, '2026-11-22')).toEqual([]);
+    expect(plannedSessions(s, START, START).map((x) => x.key)).toEqual(['lift']);
+    expect(plannedSessions(s, START, '2026-11-25').map((x) => x.template)).toContain('tempo');
+    expect(plannedSessions(s, START, '2026-11-29')).toEqual([]);
+    expect(plannedSessions(s, START, '2026-11-22')).toEqual([]);
   });
   it('libera o intervalado a partir da data definida', () => {
     const s2 = { ...s, intervalsFrom: '2026-12-09' };
-    expect(plannedSessions(s2, '2026-12-02').find((x) => x.key === 'spin')?.template).toBe('tempo');
-    expect(plannedSessions(s2, '2026-12-09').find((x) => x.key === 'spin')?.template).toBe('intervalado');
+    expect(plannedSessions(s2, START, '2026-12-02').find((x) => x.key === 'spin')?.template).toBe('tempo');
+    expect(plannedSessions(s2, START, '2026-12-09').find((x) => x.key === 'spin')?.template).toBe('intervalado');
   });
   it('não acusa problema na semana padrão', () => {
     expect(scheduleWarnings(s)).toEqual([]);
@@ -105,8 +114,8 @@ describe('banco de calorias', () => {
   it('refeição pulada vira crédito, metade da refeição vira meio crédito', () => {
     let s = baseState();
     s = withDay(s, START, (d) => {
-      d.meals.lanche = makeMealLog(MEAL_BY_ID.lanche, 'skipped');
-      d.meals.almoco = makeMealLog(MEAL_BY_ID.almoco, 'less', { fraction: 0.5 });
+      d.meals.lanche = makeMealLog(PLAN, MEAL.lanche, 'skipped');
+      d.meals.almoco = makeMealLog(PLAN, MEAL.almoco, 'less', { fraction: 0.5 });
     });
     const ev = evalDay(s, START, opts);
     expect(ev.foodDev).toBeGreaterThan(350 + 280);
@@ -137,9 +146,25 @@ describe('banco de calorias', () => {
     dates.forEach((date, i) => {
       s = withDay(s, date, (d) => d.exercises.push({ id: date, kind: 'spinning', template: 'z2', status: 'done', plannedKey: 'spin', activeKcal: kcal[i], at: '' }));
     });
-    const t = exerciseTargets(s);
+    const t = exerciseTargets(s.protocols[0], calibrationSamples(s));
     expect(t.z2.value).toBe(320);
     expect(t.z2.calibrated).toBe(true);
+  });
+
+  it('"fiz parte" sem calorias do relógio conta metade da meta', () => {
+    let s = baseState();
+    s = withDay(s, '2026-11-24', (d) => d.exercises.push({ id: 'p', kind: 'spinning', template: 'z2', status: 'partial', plannedKey: 'spin', at: '' }));
+    expect(evalDay(s, '2026-11-24', opts).exDevAdj).toBe(-125);
+  });
+
+  it('registro de refeição que saiu do cardápio continua contando', () => {
+    let s = baseState();
+    s = withDay(s, START, (d) => {
+      d.meals.ceia = { status: 'swapped', kcal: 300, p: 20, c: 30, f: 10, items: [], at: '' };
+    });
+    const ev = evalDay(s, START, opts);
+    expect(ev.orphanMeals.map((o) => o.id)).toEqual(['ceia']);
+    expect(ev.foodDev).toBe(-300);
   });
 
   it('acumula o saldo dos dias fechados', () => {
@@ -153,8 +178,7 @@ describe('banco de calorias', () => {
 });
 
 describe('compensação', () => {
-  const settings = defaultSettings(START);
-  const base = { settings, weightKg: 106, z2PerMin: 250 / 30, planKcal: PLAN_KCAL, foodShare: 0.5 };
+  const base = { plan: PLAN, weightKg: 106, z2PerMin: 250 / 30, foodShare: 0.5 };
 
   it('divide a dívida entre comida e exercício dentro dos limites', () => {
     const r = planCompensation({ ...base, debt: 580, mode: 'mix', days: 3 });
@@ -175,6 +199,85 @@ describe('compensação', () => {
     const r = planCompensation({ ...base, debt: 10000, mode: 'mix', days: 3 });
     expect(r.daysUsed).toBe(14);
     expect(r.absorbed).toBe(10000 - 14 * 525);
+  });
+
+  it('"Segui" durante a compensação registra o prato reduzido e o banco reconhece', () => {
+    const today = '2026-11-25';
+    let s = baseState();
+    s.compensation = { active: true, mode: 'food', days: 3, startDate: today, foodShare: 0.5, debt: 900, perDayFood: 300, perDayActive: 0, createdAt: '' };
+    s = withDay(s, START, (d) => d.extras.push({ id: 'x', name: 'pizza', kcal: 900, p: 0, c: 0, f: 0, at: '' }));
+    const b0 = bankSummary(s, { today, nowMin: 5 * 60 });
+    const comp = compensationToday(s, today, b0.projected);
+    expect(comp?.status).toBe('ativa');
+    const cuts = dayCuts(b0.today, comp);
+    expect(cuts.kcal).toBe(300);
+    expect(cuts.steps.length).toBeGreaterThan(0);
+    s = withDay(s, today, (d) => {
+      for (const m of PLAN.meals) d.meals[m.id] = makeMealLog(PLAN, m, 'planned', { cuts: cuts.steps });
+    });
+    const ev = evalDay(s, today, { today, nowMin: 22 * 60 });
+    expect(ev.foodDev).toBeGreaterThanOrEqual(295);
+    expect(ev.foodDev).toBeLessThanOrEqual(310);
+  });
+
+  it('cortes usam as gramas reais quando o prato é maior que o da ordem de cortes', () => {
+    const p = structuredClone(defaultProtocol(START));
+    p.meals = p.meals.map((m) => (m.id === 'almoco' ? { ...m, items: m.items.map((it) => (it.food === 'arroz' ? { ...it, grams: 200 } : it)) } : m));
+    const plan = planOf(p);
+    const r = reductionPlan(plan, 500);
+    const arroz = r.steps.find((x) => x.food === 'arroz');
+    expect(arroz?.fromG).toBe(200);
+    // 200 → 140 no 1º passo do arroz; o último passo só tira 40 g porque os 500 kcal já fecham
+    expect(arroz?.toG).toBe(100);
+  });
+
+  it('meta abaixo do cardápio gera cortes no dia, mesmo sem compensação', () => {
+    const p: Protocol = { ...defaultProtocol(START), targets: { ...PROTO.targets, kcal: 2100 } };
+    const cuts = dayCuts({ plan: planOf(p), target: p.targets, isToday: false }, null);
+    expect(cuts.planGap).toBe(153);
+    expect(cuts.compFood).toBe(0);
+    expect(cuts.steps.reduce((a, x) => a + x.kcal, 0)).toBeGreaterThanOrEqual(150);
+  });
+});
+
+describe('protocolo versionado', () => {
+  const today = '2026-12-01';
+  const opts = { today, nowMin: 12 * 60 };
+  const v2: Protocol = {
+    ...defaultProtocol('2026-11-28'),
+    id: 'v2',
+    name: 'Menos calorias',
+    targets: { ...PROTO.targets, kcal: 2100, steps: 12000 },
+  };
+
+  it('cada dia usa a versão que estava em vigor', () => {
+    const s = { ...baseState(), protocols: upsertVersion([defaultProtocol(START)], v2) };
+    expect(evalDay(s, '2026-11-27', opts).target.kcal).toBe(2253);
+    expect(evalDay(s, '2026-11-28', opts).target.kcal).toBe(2100);
+    // dia sem registro na versão nova: comeu o cardápio (2253) com meta 2100
+    expect(evalDay(s, '2026-11-28', opts).foodDev).toBe(-153);
+    expect(evalDay(s, '2026-11-27', opts).foodDev).toBe(0);
+  });
+
+  it('calibração recomeça quando a sessão muda numa versão nova', () => {
+    let s = baseState();
+    for (const [date, kcal] of [
+      ['2026-11-24', 320],
+      ['2026-11-27', 300],
+      ['2026-11-28', 340],
+    ] as const) {
+      s = withDay(s, date, (d) => d.exercises.push({ id: date, kind: 'spinning', template: 'z2', status: 'done', plannedKey: 'spin', activeKcal: kcal, at: '' }));
+    }
+    const longer = structuredClone(defaultProtocol('2026-11-30'));
+    longer.id = 'z45';
+    longer.training.sessions.z2 = { ...longer.training.sessions.z2, name: 'Z2 45', blocks: ['Aquecimento · 5 min', 'Treino · 37 min', 'Desaquecimento · 3 min'] };
+    longer.training.exerciseTargets.z2 = 380;
+    s = { ...s, protocols: upsertVersion(s.protocols, longer) };
+    const samples = calibrationSamples(s);
+    expect(exerciseTargets(s.protocols[0], samples).z2).toMatchObject({ value: 320, calibrated: true });
+    expect(exerciseTargets(longer, samples).z2).toMatchObject({ value: 380, calibrated: false });
+    // musculação não mudou: continua usando as amostras antigas (nenhuma aqui)
+    expect(exerciseTargets(longer, samples).musculacao.value).toBe(280);
   });
 });
 
@@ -208,8 +311,8 @@ describe('revisão do dia 14', () => {
 
 describe('refeição atual', () => {
   it('escolhe a refeição pela hora', () => {
-    expect(currentMealIndex(5 * 60)).toEqual({ index: 0, phase: 'antes' });
-    expect(currentMealIndex(9 * 60 + 20).index).toBe(1);
-    expect(currentMealIndex(21 * 60 + 30).phase).toBe('encerrado');
+    expect(currentMealIndex(PLAN.meals, 5 * 60)).toEqual({ index: 0, phase: 'antes' });
+    expect(currentMealIndex(PLAN.meals, 9 * 60 + 20).index).toBe(1);
+    expect(currentMealIndex(PLAN.meals, 21 * 60 + 30).phase).toBe('encerrado');
   });
 });

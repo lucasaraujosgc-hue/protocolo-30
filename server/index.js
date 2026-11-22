@@ -20,6 +20,7 @@ import {
   sanitizeDay,
   sanitizeMeasurement,
   sanitizeProfile,
+  sanitizeProtocols,
   sanitizeSettings,
   sanitizeState,
 } from './sanitize.js';
@@ -125,7 +126,24 @@ app.put('/api/profile', async (req, res) => {
 
 app.put('/api/settings', async (req, res) => {
   const settings = sanitizeSettings(req.body);
-  res.json(await store.update((s) => void (s.settings = settings)));
+  res.json(
+    await store.update((s) => {
+      // Enquanto não há protocolo salvo, os campos antigos ficam guardados para a migração no app.
+      s.settings = s.protocols?.length ? settings : { ...(s.settings ?? {}), ...settings };
+    }),
+  );
+});
+
+app.put('/api/protocols', async (req, res) => {
+  const protocols = sanitizeProtocols(req.body?.protocols);
+  res.json(
+    await store.update((s) => {
+      s.protocols = protocols;
+      s.version = 2;
+      // Com o protocolo salvo, as configurações antigas deixam de ser usadas.
+      s.settings = { startDate: s.settings?.startDate ?? protocols[0].from };
+    }),
+  );
 });
 
 app.put('/api/day/:date', async (req, res) => {
@@ -174,7 +192,12 @@ app.get('/api/export', (req, res) => {
 app.post('/api/import', async (req, res) => {
   const next = sanitizeState(req.body);
   await store.snapshot('import');
-  res.json(await store.update((s) => void Object.assign(s, next)));
+  res.json(
+    await store.update((s) => {
+      for (const k of Object.keys(s)) delete s[k];
+      Object.assign(s, next);
+    }),
+  );
 });
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Rota não encontrada.' }));

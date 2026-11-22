@@ -2,23 +2,25 @@ import { Bike, Check, Dumbbell, Minus, Pizza, Plus, Repeat, Scale, Footprints, X
 import { useState } from 'react';
 import { ExerciseSheet } from '../components/ExerciseSheet';
 import { ExtraSheet, MealLogSheet, STATUS_CHIP, STATUS_LABEL } from '../components/MealSheets';
-import { MeasureSheet } from '../components/MeasureSheet';
+import { MeasureSheet, RANGES } from '../components/MeasureSheet';
 import { Delta, MacroBars, MacroChips, NumberField, Ring } from '../components/ui';
 import { fmtFull, fmtShort, nowHHMM } from '../lib/dates';
-import { compensationToday, currentMealIndex, currentWeight, kcalPerStep, makeMealLog, uid, type SessionEval } from '../lib/engine';
+import { compensationToday, currentMealIndex, currentWeight, dayCuts, kcalPerStep, makeMealLog, uid, type SessionEval } from '../lib/engine';
 import { fmt1, fmtInt } from '../lib/format';
-import { MEALS, itemLabel, itemTotals } from '../lib/plan';
-import { SPIN_TEMPLATES } from '../lib/schedule';
+import { itemLabel, itemTotals } from '../lib/plan';
 import { useStore } from '../lib/store';
-import type { ExerciseLog, MealStatus } from '../lib/types';
+import type { ExerciseLog, MealStatus, Protocol } from '../lib/types';
 import type { TabId } from '../App';
 
 export function Home({ go }: { go: (t: TabId) => void }) {
   const { state, today, nowMin, bank, saveDay, saveMeasurement, toast } = useStore();
   const ev = bank.today;
+  const plan = ev.plan;
+  const meals = plan.meals;
   const comp = compensationToday(state, today, bank.projected);
-  const { index, phase } = currentMealIndex(nowMin);
-  const meal = MEALS[index];
+  const cuts = dayCuts(ev, comp);
+  const { index, phase } = currentMealIndex(meals, nowMin);
+  const meal = meals[index];
   const me = ev.meals[index];
   const [sheet, setSheet] = useState<
     | { t: 'meal'; status?: MealStatus; mealIndex: number }
@@ -38,14 +40,15 @@ export function Home({ go }: { go: (t: TabId) => void }) {
   const stepsTarget = ev.stepsTarget + compSteps;
   const weight = currentWeight(state, today);
   const todayWeights = state.measurements.filter((m) => m.date === today && m.weight);
-  const pendingBefore = ev.pendingMeals.filter((id) => MEALS.findIndex((m) => m.id === id) < index);
+  const pendingBefore = ev.pendingMeals.filter((id) => meals.findIndex((m) => m.id === id) < index);
 
   const quickPlanned = async (i: number) => {
-    const m = MEALS[i];
+    const m = meals[i];
+    const withCuts = cuts.steps.some((c) => c.meal === m.id);
     const ok = await saveDay(today, (d) => {
-      d.meals[m.id] = makeMealLog(m, 'planned');
+      d.meals[m.id] = makeMealLog(plan, m, 'planned', { cuts: cuts.steps });
     });
-    if (ok) toast(`${m.short} registrado conforme o plano`);
+    if (ok) toast(`${m.short} registrado conforme o plano${withCuts ? ' de hoje (com cortes)' : ''}`);
   };
 
   const saveSteps = async () => {
@@ -61,6 +64,10 @@ export function Home({ go }: { go: (t: TabId) => void }) {
 
   const saveWeight = async () => {
     if (!weightInput) return;
+    if (weightInput < RANGES.weight[0] || weightInput > RANGES.weight[1]) {
+      toast(`Peso fora da faixa (${RANGES.weight[0]}–${RANGES.weight[1]} kg). Confira a vírgula.`, 'err');
+      return;
+    }
     // Corrigir o peso do dia atualiza o registro de hoje em vez de criar outro.
     const existing = state.measurements.find((m) => m.date === today && m.weight !== undefined);
     const ok = await saveMeasurement(
@@ -136,15 +143,20 @@ export function Home({ go }: { go: (t: TabId) => void }) {
         </div>
         <div className="meal-items">
           {meal.items.map((it, i) => {
-            const cut = comp?.status === 'ativa' ? comp.reductions.find((r) => r.meal === meal.id && r.food === it.food) : undefined;
+            const cut = cuts.steps.find((r) => r.meal === meal.id && r.food === it.food);
+            const kcal = itemTotals(plan, it).kcal;
             return (
               <div key={i} className="meal-item">
                 <span>
-                  {itemLabel(it)}
-                  {cut && <div className="tiny warn-text">Hoje: {cut.toG} g (compensação)</div>}
+                  {itemLabel(plan, it)}
+                  {cut && (
+                    <div className="tiny warn-text">
+                      Hoje: {cut.toG} g ({cuts.compFood > 0 ? 'compensação' : 'meta do dia'})
+                    </div>
+                  )}
                 </span>
                 <span className="num muted">{it.grams ? `${it.grams} g` : ''}</span>
-                <span className="num">{it.grams ? fmtInt(itemTotals(it).kcal) : ''}</span>
+                <span className="num">{kcal > 0 ? fmtInt(kcal) : ''}</span>
               </div>
             );
           })}
@@ -170,10 +182,10 @@ export function Home({ go }: { go: (t: TabId) => void }) {
             Troquei
           </button>
         </div>
-        {phase === 'agora' && MEALS[index + 1] && (
+        {phase === 'agora' && meals[index + 1] && (
           <div className="row between small" style={{ marginTop: 12 }}>
             <span className="muted">
-              Depois: <b style={{ color: 'var(--text)' }}>{MEALS[index + 1].name}</b> às {MEALS[index + 1].time}
+              Depois: <b style={{ color: 'var(--text)' }}>{meals[index + 1].name}</b> às {meals[index + 1].time}
             </span>
             <button className="btn sm ghost" onClick={() => go('plano')}>
               Ver dia <ArrowRight size={14} />
@@ -184,7 +196,7 @@ export function Home({ go }: { go: (t: TabId) => void }) {
 
       {pendingBefore.length > 0 && (
         <div className="hint">
-          Sem registro: {pendingBefore.map((id) => MEALS.find((m) => m.id === id)!.short).join(', ')}. Sem registro, a refeição conta como seguida.{' '}
+          Sem registro: {pendingBefore.map((id) => plan.mealById[id]?.short ?? id).join(', ')}. Sem registro, a refeição conta como seguida.{' '}
           <button className="cyan" style={{ textDecoration: 'underline' }} onClick={() => go('plano')}>
             Revisar
           </button>
@@ -200,17 +212,10 @@ export function Home({ go }: { go: (t: TabId) => void }) {
         </div>
         {ev.sessions.length === 0 && ev.extraSessions.length === 0 && <div className="muted small">Dia de descanso. Uma caminhada leve conta nos passos.</div>}
         {ev.sessions.map((s) => (
-          <SessionRow key={s.planned.key} s={s} onClick={() => setSheet({ t: 'ex', session: s, log: s.log })} />
+          <SessionRow key={s.planned.key} s={s} cf={ev.creditFactor} onClick={() => setSheet({ t: 'ex', session: s, log: s.log })} />
         ))}
         {ev.extraSessions.map(({ log, dev }) => (
-          <div key={log.id} className="session" onClick={() => setSheet({ t: 'ex', log })} role="button">
-            <div className={`session-icon ${log.kind === 'musculacao' ? 'lift' : ''}`}>{log.kind === 'musculacao' ? <Dumbbell size={20} /> : <Bike size={20} />}</div>
-            <div>
-              <div style={{ fontWeight: 600 }}>Extra · {log.kind === 'spinning' ? SPIN_TEMPLATES[log.template ?? 'livre'].name : log.kind === 'musculacao' ? 'Musculação' : 'Cardio'}</div>
-              <div className="tiny muted">{log.activeKcal ? `${fmtInt(log.activeKcal)} kcal ativas` : 'sem calorias'}</div>
-            </div>
-            <Delta v={dev * state.settings.creditFactor} />
-          </div>
+          <ExtraSessionRow key={log.id} log={log} dev={dev} cf={ev.creditFactor} sessionName={exerciseName(ev.protocol, log)} onClick={() => setSheet({ t: 'ex', log })} />
         ))}
       </div>
 
@@ -301,6 +306,11 @@ export function Home({ go }: { go: (t: TabId) => void }) {
               ) : (
                 <span className="muted">Nada registrado</span>
               )}
+              {ev.orphanMeals.length > 0 && (
+                <div className="tiny warn-text" style={{ marginTop: 4 }}>
+                  + {fmtInt(ev.orphanMeals.reduce((a, o) => a + o.log.kcal, 0))} kcal de refeições que saíram do cardápio (veja em Refeições)
+                </div>
+              )}
             </div>
           </div>
           <button className="btn sm" onClick={() => setSheet({ t: 'extra' })}>
@@ -312,9 +322,11 @@ export function Home({ go }: { go: (t: TabId) => void }) {
       {sheet?.t === 'meal' && (
         <MealLogSheet
           date={today}
-          meal={MEALS[sheet.mealIndex]}
+          plan={plan}
+          meal={meals[sheet.mealIndex]}
           log={ev.meals[sheet.mealIndex].log}
           initial={sheet.status}
+          cuts={cuts.steps}
           onClose={() => setSheet(null)}
         />
       )}
@@ -325,9 +337,27 @@ export function Home({ go }: { go: (t: TabId) => void }) {
   );
 }
 
-export function SessionRow({ s, onClick }: { s: SessionEval; onClick: () => void }) {
-  const { state } = useStore();
-  const cf = state.settings.creditFactor;
+export function exerciseName(protocol: Protocol, log: ExerciseLog): string {
+  if (log.kind === 'spinning') return `Spinning · ${protocol.training.sessions[log.template ?? 'livre']?.name ?? 'livre'}`;
+  return log.kind === 'musculacao' ? 'Musculação' : 'Cardio';
+}
+
+export function ExtraSessionRow({ log, dev, cf, sessionName, onClick }: { log: ExerciseLog; dev: number; cf: number; sessionName: string; onClick: () => void }) {
+  return (
+    <div className="session" onClick={onClick} role="button">
+      <div className={`session-icon ${log.kind === 'musculacao' ? 'lift' : ''}`}>{log.kind === 'musculacao' ? <Dumbbell size={20} /> : <Bike size={20} />}</div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontWeight: 600 }} className="ellipsis">
+          Extra · {sessionName}
+        </div>
+        <div className="tiny muted">{log.activeKcal ? `${fmtInt(log.activeKcal)} kcal ativas` : 'sem calorias ativas'}</div>
+      </div>
+      <Delta v={dev * cf} />
+    </div>
+  );
+}
+
+export function SessionRow({ s, cf, onClick }: { s: SessionEval; cf: number; onClick: () => void }) {
   const st = s.state;
   return (
     <div className="session" onClick={onClick} role="button">

@@ -6,9 +6,10 @@ const KEEP_BACKUPS = 30;
 
 export function emptyState() {
   return {
-    version: 1,
+    version: 2,
     profile: null,
     settings: null,
+    protocols: [],
     days: {},
     measurements: [],
     compensation: null,

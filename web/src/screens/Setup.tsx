@@ -3,7 +3,8 @@ import { NumberField, Segmented, Switch } from '../components/ui';
 import { api } from '../lib/api';
 import { nowHHMM, todayISO } from '../lib/dates';
 import { uid } from '../lib/engine';
-import { DEFAULT_START, defaultSettings } from '../lib/schedule';
+import { defaultProtocol } from '../lib/protocol';
+import { DEFAULT_START } from '../lib/schedule';
 import type { RawState } from '../lib/types';
 
 export function Setup({ onDone }: { onDone: (s: RawState) => void }) {
@@ -28,7 +29,8 @@ export function Setup({ onDone }: { onDone: (s: RawState) => void }) {
     setBusy(true);
     try {
       await api.profile({ name: name || undefined, heightCm: height, age, sex });
-      let s = await api.settings(defaultSettings(start));
+      await api.settings({ startDate: start });
+      let s = await api.protocols([defaultProtocol(start)]);
       if (weight || waist) {
         s = await api.measurement({ id: uid(), date: today, time: nowHHMM(), fasting, weight, waistNavel: waist });
       }

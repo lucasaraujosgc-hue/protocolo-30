@@ -20,6 +20,7 @@ import {
 } from '../lib/engine';
 import { fmt1, fmtInt } from '../lib/format';
 import { MEASURE_META, MEASURES } from '../lib/measures';
+import { editFrom } from '../lib/protocol';
 import { nextHardDay } from '../lib/schedule';
 import { useStore } from '../lib/store';
 import type { Measurement, MeasureKey } from '../lib/types';
@@ -28,7 +29,7 @@ const Body3D = lazy(() => import('../components/Body3D'));
 const ACCENT = '#7aa2f7';
 
 export function Progress() {
-  const { state, today, nowMin, targets, bank, saveSettings } = useStore();
+  const { state, today, nowMin, samples, bank, protocol, saveProtocols } = useStore();
   const [sheet, setSheet] = useState<{ m?: Measurement } | null>(null);
   const [metric, setMetric] = useState<MeasureKey | 'bf'>('weight');
   const [snapIdx, setSnapIdx] = useState<number | null>(null);
@@ -48,7 +49,7 @@ export function Progress() {
   const trend = useMemo(() => emaTrend(weights), [weights]);
   const lv = useMemo(() => latestValues(ms), [ms]);
   const comp = useMemo(() => composition(lv, profile), [lv, profile]);
-  const opts = { today, nowMin, targets };
+  const opts = { today, nowMin, samples };
   const rev = useMemo(() => review(state, opts, bank), [state, today, bank]); // eslint-disable-line react-hooks/exhaustive-deps
   const tdee = useMemo(() => adaptiveTdee(state, opts, bank), [state, today, bank]); // eslint-disable-line react-hooks/exhaustive-deps
   const crit = useMemo(() => intervalCriteria(state), [state]);
@@ -326,7 +327,7 @@ export function Progress() {
             Gasto real estimado pela balança: <b className="num">{fmtInt(tdee.tdee)} kcal/dia</b> (ingestão média {fmtInt(tdee.avgIntake)}, {fmt1(-tdee.slopeKgWeek)} kg/sem, {tdee.days} dias). Use este número no lugar da estimativa por fórmula.
           </div>
         )}
-        {rev.available && !state.settings.intervalsFrom && (
+        {rev.available && !protocol.training.intervalsFrom && (
           <div className="stack tight" style={{ marginTop: 12 }}>
             <div className="label">Liberar o intervalado?</div>
             <Crit ok={crit.tempoRpe} text="Blocos do Tempo 3x4 com RPE até 6" />
@@ -335,9 +336,17 @@ export function Progress() {
             <button
               className="btn sm"
               style={{ marginTop: 6 }}
-              onClick={() => saveSettings({ ...state.settings, intervalsFrom: nextHardDay(state.settings, today) })}
+              onClick={() => {
+                const when = nextHardDay(protocol.training, today);
+                saveProtocols(
+                  editFrom(state.protocols, today, (p) => {
+                    p.training.intervalsFrom = when;
+                  }),
+                  `Intervalado liberado a partir de ${fmtShort(when)}`,
+                );
+              }}
             >
-              Liberar a partir de {fmtShort(nextHardDay(state.settings, today))}
+              Liberar a partir de {fmtShort(nextHardDay(protocol.training, today))}
             </button>
           </div>
         )}

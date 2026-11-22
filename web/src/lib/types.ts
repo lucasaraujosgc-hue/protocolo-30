@@ -1,5 +1,5 @@
-export type MealId = 'cafe' | 'lanche' | 'almoco' | 'pre' | 'jantar';
-export const MEAL_IDS: MealId[] = ['cafe', 'lanche', 'almoco', 'pre', 'jantar'];
+/** Identificador de refeição (definido pelo protocolo: cafe, lanche, almoco…). */
+export type MealId = string;
 
 export interface Totals {
   kcal: number;
@@ -60,7 +60,7 @@ export interface ExerciseLog {
 }
 
 export interface DayLog {
-  meals: Partial<Record<MealId, MealLog>>;
+  meals: Record<MealId, MealLog>;
   extras: ExtraLog[];
   exercises: ExerciseLog[];
   steps?: number;
@@ -102,8 +102,80 @@ export type MeasureKey =
   | 'calf'
   | 'restingHr';
 
-export interface TargetPeriod {
-  from: string;
+export type TargetKey = 'z2' | 'tempo' | 'intervalado' | 'livre' | 'musculacao' | 'outro';
+export const TARGET_KEYS: TargetKey[] = ['z2', 'tempo', 'intervalado', 'livre', 'musculacao', 'outro'];
+export const SPIN_KEYS: SpinTemplate[] = ['z2', 'tempo', 'intervalado', 'livre'];
+
+/* ------------------------------------------------------------- protocolo */
+
+/** Item do cardápio: alimento da tabela (food + grams), item livre sem calorias (free) ou item com macros próprios. */
+export interface ProtoItem {
+  food?: string;
+  grams?: number;
+  label?: string;
+  free?: string;
+  kcal?: number;
+  p?: number;
+  c?: number;
+  f?: number;
+}
+
+export interface ProtoMeal {
+  id: MealId;
+  name: string;
+  short?: string;
+  time: string;
+  hint?: string;
+  items: ProtoItem[];
+}
+
+export interface ProtoFood {
+  id: string;
+  name: string;
+  group?: string;
+  per100: Totals;
+  unit?: { label: string; grams: number };
+  source?: string;
+}
+
+export interface SessionTemplate {
+  name: string;
+  zone: string;
+  hr: string;
+  rpe: string;
+  blocks: string[];
+}
+
+export interface HrZone {
+  z: number;
+  range: string;
+  use: string;
+}
+
+export interface Training {
+  liftDays: number[];
+  legDays: number[];
+  spinDays: number[];
+  hardDay: number;
+  spinTime: string;
+  liftTime: string;
+  intervalsFrom: string | null;
+  exerciseTargets: Record<TargetKey, number>;
+  sessions: Record<SpinTemplate, SessionTemplate>;
+  zones: HrZone[];
+  liftDetail: string;
+}
+
+export interface BankParams {
+  /** Fração dos créditos de exercício/passos que entra no banco (relógios superestimam). */
+  creditFactor: number;
+  maxFoodCut: number;
+  foodFloor: number;
+  maxExtraActive: number;
+  autoCalibrate: boolean;
+}
+
+export interface DailyTargets {
   kcal: number;
   p: number;
   c: number;
@@ -111,25 +183,40 @@ export interface TargetPeriod {
   steps: number;
 }
 
-export type TargetKey = 'z2' | 'tempo' | 'intervalado' | 'livre' | 'musculacao' | 'outro';
+export interface LadderStep {
+  meal: MealId;
+  food: string;
+  from: number;
+  to: number;
+}
+
+export interface SubstitutionRow {
+  food: string;
+  qty: string;
+  kcal: number;
+}
+
+export interface Protocol {
+  id: string;
+  name: string;
+  /** Vale a partir desta data (inclusive) até a próxima versão. */
+  from: string;
+  createdAt: string;
+  source: 'padrao' | 'ajustes' | 'arquivo' | 'migracao';
+  notes?: string;
+  targets: DailyTargets;
+  meals: ProtoMeal[];
+  foods: ProtoFood[];
+  training: Training;
+  bank: BankParams;
+  reductionLadder: LadderStep[];
+  substitutions: { carbs: SubstitutionRow[]; proteins: SubstitutionRow[] };
+}
+
+/* ----------------------------------------------------------------- estado */
 
 export interface Settings {
   startDate: string;
-  targets: TargetPeriod[];
-  exerciseTargets: Record<TargetKey, number>;
-  autoCalibrate: boolean;
-  /** Fração dos créditos de exercício/passos que entra no banco (relógios superestimam). */
-  creditFactor: number;
-  maxFoodCut: number;
-  foodFloor: number;
-  maxExtraActive: number;
-  liftDays: number[];
-  legDays: number[];
-  spinDays: number[];
-  hardDay: number;
-  intervalsFrom: string | null;
-  spinTime: string;
-  liftTime: string;
 }
 
 export interface Profile {
@@ -154,15 +241,42 @@ export interface Compensation {
 }
 
 export interface AppState {
-  version: 1;
+  version: 2;
   profile: Profile | null;
   settings: Settings;
+  protocols: Protocol[];
   days: Record<string, DayLog>;
   measurements: Measurement[];
   compensation: Compensation | null;
   updatedAt: string;
 }
 
-export interface RawState extends Omit<AppState, 'settings'> {
-  settings: Partial<Settings> | null;
+/** Formato antigo das configurações (antes do protocolo versionado). */
+export interface LegacySettings {
+  startDate?: string;
+  targets?: { from: string; kcal: number; p: number; c: number; f: number; steps: number }[];
+  exerciseTargets?: Partial<Record<TargetKey, number>>;
+  autoCalibrate?: boolean;
+  creditFactor?: number;
+  maxFoodCut?: number;
+  foodFloor?: number;
+  maxExtraActive?: number;
+  liftDays?: number[];
+  legDays?: number[];
+  spinDays?: number[];
+  hardDay?: number;
+  intervalsFrom?: string | null;
+  spinTime?: string;
+  liftTime?: string;
+}
+
+export interface RawState {
+  version?: number;
+  profile: Profile | null;
+  settings: LegacySettings | null;
+  protocols?: Protocol[];
+  days: Record<string, DayLog>;
+  measurements: Measurement[];
+  compensation: Compensation | null;
+  updatedAt: string;
 }
