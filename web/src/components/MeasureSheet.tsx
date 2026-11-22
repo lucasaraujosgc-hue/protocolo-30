@@ -55,7 +55,6 @@ export function MeasureSheet({ initial, onClose }: { initial?: Measurement; onCl
                   <NumberField
                     label={
                       <span className="row" style={{ gap: 6 }}>
-                        <i style={{ width: 8, height: 8, borderRadius: 8, background: x.color, display: 'inline-block' }} />
                         {x.short}
                         <button type="button" onClick={() => setOpen(open === x.key ? null : x.key)} aria-label={`Como medir ${x.label}`} style={{ color: 'var(--dim)', display: 'inline-flex' }}>
                           <Info size={13} />

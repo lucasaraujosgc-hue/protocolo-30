@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { lerpMeasures, RING_KEYS, RING_META, type BodyMeasures, type RingKey } from '../lib/body';
+import { lerpMeasures, RING_KEYS, type BodyMeasures, type RingKey } from '../lib/body';
 
 /* ======================================================================
- * Holograma corporal: um manequim estilizado cujas proporções vêm das
- * suas medidas (circunferências → elipses). Não é um escaneamento: é um
- * modelo para enxergar a evolução entre datas.
+ * Modelo 3D: um manequim simples cujas proporções vêm das suas medidas
+ * (circunferências → elipses). Não é um escaneamento: é um modelo para
+ * enxergar a evolução entre datas.
  * ==================================================================== */
 
 interface Level {
@@ -315,176 +315,58 @@ function makeLoft(levels: Level[], caps: [boolean, boolean]) {
   return geo;
 }
 
-function contourVertexCount(n: number) {
-  const loops = Math.ceil(n / 2);
-  return loops * SEG * 2 + MERIDIANS * (n - 1) * 2;
-}
-
-function writeContours(geo: THREE.BufferGeometry, levels: Level[]) {
-  const pos = geo.getAttribute('position').array as Float32Array;
-  let o = 0;
-  const pt = (L: Level, j: number) => {
-    const t = (j / SEG) * Math.PI * 2;
-    pos[o++] = L.a * Math.cos(t) * 1.002;
-    pos[o++] = L.y;
-    pos[o++] = L.z + L.b * Math.sin(t) * 1.002;
-  };
-  for (let i = 0; i < levels.length; i += 2) {
-    for (let j = 0; j < SEG; j++) {
-      pt(levels[i], j);
-      pt(levels[i], (j + 1) % SEG);
-    }
-  }
-  for (let k = 0; k < MERIDIANS; k++) {
-    const j = Math.round((k * SEG) / MERIDIANS);
-    for (let i = 0; i < levels.length - 1; i++) {
-      pt(levels[i], j);
-      pt(levels[i + 1], j);
-    }
-  }
-  geo.getAttribute('position').needsUpdate = true;
-  geo.computeBoundingSphere();
-}
-
-function makeContours(levels: Level[]) {
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(contourVertexCount(levels.length) * 3), 3));
-  writeContours(geo, levels);
-  return geo;
-}
-
-const RING_PTS = 96;
-
-function writeRing(geo: THREE.BufferGeometry, a: number, b: number) {
-  const pos = geo.getAttribute('position').array as Float32Array;
-  for (let i = 0; i < RING_PTS; i++) {
-    const t = (i / RING_PTS) * Math.PI * 2;
-    pos[i * 3] = a * Math.cos(t);
-    pos[i * 3 + 1] = 0;
-    pos[i * 3 + 2] = b * Math.sin(t);
-  }
-  geo.getAttribute('position').needsUpdate = true;
-  geo.computeBoundingSphere();
-}
-
-function makeRing(a: number, b: number) {
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(RING_PTS * 3), 3));
-  writeRing(geo, a, b);
-  return geo;
-}
-
-/* ------------------------------------------------------------ materiais */
-
-function holoMaterial(color: string, opacity: number) {
-  return new THREE.ShaderMaterial({
-    uniforms: {
-      uColor: { value: new THREE.Color(color) },
-      uTime: { value: 0 },
-      uOpacity: { value: opacity },
-    },
-    vertexShader: /* glsl */ `
-      varying vec3 vN;
-      varying vec3 vV;
-      varying float vY;
-      void main() {
-        vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        vN = normalize(normalMatrix * normal);
-        vV = normalize(-mv.xyz);
-        vY = (modelMatrix * vec4(position, 1.0)).y;
-        gl_Position = projectionMatrix * mv;
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      uniform vec3 uColor;
-      uniform float uTime;
-      uniform float uOpacity;
-      varying vec3 vN;
-      varying vec3 vV;
-      varying float vY;
-      void main() {
-        float fres = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 2.0);
-        float scan = 0.6 + 0.4 * sin(vY * 140.0 - uTime * 4.0);
-        float alpha = (0.05 + fres * 0.85) * (0.7 + 0.3 * scan) * uOpacity;
-        gl_FragColor = vec4(uColor * (0.55 + fres * 1.5), alpha);
-      }
-    `,
-    transparent: true,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    blending: THREE.AdditiveBlending,
-  });
-}
-
-function lineMaterial(color: string, opacity: number) {
-  return new THREE.LineBasicMaterial({ color, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false });
-}
-
 /* ------------------------------------------------------------------ rig */
 
+type RigStyle = 'solid' | 'ghost';
+
+/** Corpo montado a partir das medidas: sólido fosco (atual) ou silhueta translúcida (comparação). */
 class Rig {
   group = new THREE.Group();
-  private parts = new Map<string, { obj: THREE.Group; mesh: THREE.Mesh; lines: THREE.LineSegments; caps: [boolean, boolean] }>();
+  private parts = new Map<string, { obj: THREE.Group; mesh: THREE.Mesh; caps: [boolean, boolean] }>();
   private balls = new Map<string, THREE.Group>();
-  rings = new Map<RingKey, { obj: THREE.Group; loops: THREE.LineLoop[]; mats: THREE.LineBasicMaterial[] }>();
-  private sphere = new THREE.SphereGeometry(1, 28, 18);
-  private sphereLines: THREE.BufferGeometry;
-  holo: THREE.ShaderMaterial;
-  lines: THREE.LineBasicMaterial;
+  private rings = new Map<RingKey, { obj: THREE.Group; mesh: THREE.Mesh }>();
+  private sphere = new THREE.SphereGeometry(1, 32, 20);
+  private material: THREE.Material;
+  private ringMaterial = new THREE.MeshBasicMaterial({ color: '#7aa2f7' });
   ringFront = new Map<RingKey, THREE.Vector3>();
 
-  constructor(m: BodyMeasures, color: string, opacity: number, lineOpacity: number, withRings: boolean) {
-    this.holo = holoMaterial(color, opacity);
-    this.lines = lineMaterial(color, lineOpacity);
-    const latLines: number[] = [];
-    for (let i = 1; i < 9; i++) {
-      const phi = (i / 9) * Math.PI;
-      for (let j = 0; j < 32; j++) {
-        const t0 = (j / 32) * Math.PI * 2;
-        const t1 = ((j + 1) / 32) * Math.PI * 2;
-        latLines.push(Math.sin(phi) * Math.cos(t0), Math.cos(phi), Math.sin(phi) * Math.sin(t0));
-        latLines.push(Math.sin(phi) * Math.cos(t1), Math.cos(phi), Math.sin(phi) * Math.sin(t1));
-      }
-    }
-    this.sphereLines = new THREE.BufferGeometry();
-    this.sphereLines.setAttribute('position', new THREE.Float32BufferAttribute(latLines, 3));
-
+  constructor(m: BodyMeasures, style: RigStyle) {
+    this.material =
+      style === 'solid'
+        ? new THREE.MeshStandardMaterial({ color: '#c9cdd4', roughness: 0.78, metalness: 0.02 })
+        : new THREE.MeshBasicMaterial({ color: '#7aa2f7', transparent: true, opacity: 0.16, depthWrite: false });
     const spec = buildSpecs(m);
     for (const [name, p] of Object.entries(spec.parts)) {
       const obj = new THREE.Group();
       obj.matrixAutoUpdate = false;
       obj.matrix.copy(p.matrix);
-      const mesh = new THREE.Mesh(makeLoft(p.levels, p.caps), this.holo);
-      const lines = new THREE.LineSegments(makeContours(p.levels), this.lines);
-      obj.add(mesh, lines);
+      const mesh = new THREE.Mesh(makeLoft(p.levels, p.caps), this.material);
+      obj.add(mesh);
       this.group.add(obj);
-      this.parts.set(name, { obj, mesh, lines, caps: p.caps });
+      this.parts.set(name, { obj, mesh, caps: p.caps });
     }
     for (const [name, b] of Object.entries(spec.balls)) {
       const obj = new THREE.Group();
       obj.matrixAutoUpdate = false;
       obj.matrix.copy(b.matrix);
-      obj.add(new THREE.Mesh(this.sphere, this.holo), new THREE.LineSegments(this.sphereLines, this.lines));
+      obj.add(new THREE.Mesh(this.sphere, this.material));
       this.group.add(obj);
       this.balls.set(name, obj);
     }
-    if (withRings) {
+    if (style === 'solid') {
       for (const key of RING_KEYS) {
         const r = spec.rings[key];
         const obj = new THREE.Group();
         obj.matrixAutoUpdate = false;
         obj.matrix.copy(r.matrix);
-        const loops: THREE.LineLoop[] = [];
-        const mats: THREE.LineBasicMaterial[] = [];
-        for (let i = 0; i < 3; i++) {
-          const mat = lineMaterial(RING_META[key].color, i === 0 ? 0.85 : 0);
-          const loop = new THREE.LineLoop(makeRing(r.a + i * 0.0025, r.b + i * 0.0025), mat);
-          loops.push(loop);
-          mats.push(mat);
-          obj.add(loop);
-        }
+        obj.visible = false;
+        // Espessura constante de ~4 mm, qualquer que seja o tamanho do anel.
+        const geo = new THREE.TorusGeometry(1, 0.0045 / Math.max(r.a, 0.02), 8, 120).rotateX(Math.PI / 2);
+        const mesh = new THREE.Mesh(geo, this.ringMaterial);
+        mesh.scale.set(r.a, (r.a + r.b) / 2, r.b);
+        obj.add(mesh);
         this.group.add(obj);
-        this.rings.set(key, { obj, loops, mats });
+        this.rings.set(key, { obj, mesh });
         this.ringFront.set(key, new THREE.Vector3(0, 0, r.b).applyMatrix4(r.matrix));
       }
     }
@@ -495,7 +377,6 @@ class Rig {
     for (const [name, p] of Object.entries(spec.parts)) {
       const part = this.parts.get(name)!;
       writeLoft(part.mesh.geometry, p.levels, part.caps);
-      writeContours(part.lines.geometry, p.levels);
       part.obj.matrix.copy(p.matrix);
       part.obj.matrixWorldNeedsUpdate = true;
     }
@@ -506,7 +387,7 @@ class Rig {
     }
     for (const [key, ring] of this.rings) {
       const r = spec.rings[key];
-      ring.loops.forEach((loop, i) => writeRing(loop.geometry, r.a + i * 0.0025, r.b + i * 0.0025));
+      ring.mesh.scale.set(r.a, (r.a + r.b) / 2, r.b);
       ring.obj.matrix.copy(r.matrix);
       ring.obj.matrixWorldNeedsUpdate = true;
       this.ringFront.set(key, new THREE.Vector3(0, 0, r.b).applyMatrix4(r.matrix));
@@ -514,39 +395,29 @@ class Rig {
   }
 
   highlight(key: RingKey | null) {
-    for (const [k, ring] of this.rings) {
-      const on = key === k;
-      const dim = key !== null && !on;
-      ring.mats.forEach((mat, i) => {
-        mat.opacity = i === 0 ? (dim ? 0.28 : 0.9) : on ? 0.7 : 0;
-      });
-    }
+    for (const [k, ring] of this.rings) ring.obj.visible = key === k;
   }
 
   dispose() {
     this.group.traverse((o) => {
-      if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments || o instanceof THREE.LineLoop) {
-        if (o.geometry !== this.sphere && o.geometry !== this.sphereLines) o.geometry.dispose();
-      }
+      if (o instanceof THREE.Mesh && o.geometry !== this.sphere) o.geometry.dispose();
     });
-    for (const r of this.rings.values()) r.mats.forEach((m) => m.dispose());
     this.sphere.dispose();
-    this.sphereLines.dispose();
-    this.holo.dispose();
-    this.lines.dispose();
+    this.material.dispose();
+    this.ringMaterial.dispose();
   }
 }
 
 /* ------------------------------------------------------------- cenário */
 
-function floorTexture() {
+function shadowTexture() {
   const c = document.createElement('canvas');
   c.width = c.height = 256;
   const g = c.getContext('2d')!;
   const grd = g.createRadialGradient(128, 128, 0, 128, 128, 128);
-  grd.addColorStop(0, 'rgba(46,230,255,0.55)');
-  grd.addColorStop(0.35, 'rgba(46,230,255,0.16)');
-  grd.addColorStop(1, 'rgba(46,230,255,0)');
+  grd.addColorStop(0, 'rgba(0,0,0,0.55)');
+  grd.addColorStop(0.6, 'rgba(0,0,0,0.18)');
+  grd.addColorStop(1, 'rgba(0,0,0,0)');
   g.fillStyle = grd;
   g.fillRect(0, 0, 256, 256);
   return new THREE.CanvasTexture(c);
@@ -570,7 +441,6 @@ export default function Body3D({
   label?: string;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
-  const labelRef = useRef<HTMLDivElement>(null);
   const api = useRef<{
     setTarget: (m: BodyMeasures) => void;
     setGhost: (m: BodyMeasures | null) => void;
@@ -583,7 +453,7 @@ export default function Body3D({
     const wrap = wrapRef.current!;
     let renderer: THREE.WebGLRenderer;
     try {
-      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     } catch {
       setFailed(true);
       return;
@@ -595,8 +465,16 @@ export default function Body3D({
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(30, 1, 0.05, 50);
     const H = measures.height / 100;
-    camera.position.set(0, H * 0.56, H * 2.45);
+    camera.position.set(0, H * 0.55, H * 2.45);
     camera.lookAt(0, H * 0.5, 0);
+
+    scene.add(new THREE.HemisphereLight('#ffffff', '#5b606a', 1.15));
+    const key = new THREE.DirectionalLight('#ffffff', 1.7);
+    key.position.set(1.4, 2.6, 2.4);
+    scene.add(key);
+    const rim = new THREE.DirectionalLight('#b9c8ff', 0.6);
+    rim.position.set(-2, 1.6, -1.8);
+    scene.add(rim);
 
     const world = new THREE.Group();
     scene.add(world);
@@ -606,52 +484,21 @@ export default function Body3D({
     let target = { ...measures };
     let morphT = 1;
 
-    const rig = new Rig(current, '#2ee6ff', 1, 0.42, true);
+    const rig = new Rig(current, 'solid');
     world.add(rig.group);
     let ghostRig: Rig | null = null;
-    let highlightKey: RingKey | null = null;
 
-    // Chão holográfico
-    const floorTex = floorTexture();
-    const floor = new THREE.Mesh(
-      new THREE.CircleGeometry(0.62 * H, 64),
-      new THREE.MeshBasicMaterial({ map: floorTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }),
+    const shadowTex = shadowTexture();
+    const shadow = new THREE.Mesh(
+      new THREE.CircleGeometry(0.3 * H, 48),
+      new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false }),
     );
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.y = -0.012;
-    scene.add(floor);
-    const floorRings: THREE.LineLoop[] = [];
-    for (const r of [0.28, 0.42, 0.56]) {
-      const loop = new THREE.LineLoop(makeRing(r * H, r * H), lineMaterial('#2ee6ff', 0.22));
-      loop.position.y = -0.01;
-      scene.add(loop);
-      floorRings.push(loop);
-    }
-
-    // Anel de varredura subindo e descendo
-    const scanGeo = makeRing(0.3 * H, 0.3 * H);
-    const scanMat = lineMaterial('#9b6bff', 0.6);
-    const scan = new THREE.LineLoop(scanGeo, scanMat);
-    scene.add(scan);
-
-    // Partículas
-    const N = 140;
-    const pts = new Float32Array(N * 3);
-    for (let i = 0; i < N; i++) {
-      const r = 0.25 + Math.random() * 0.55;
-      const t = Math.random() * Math.PI * 2;
-      pts[i * 3] = Math.cos(t) * r * H;
-      pts[i * 3 + 1] = Math.random() * H;
-      pts[i * 3 + 2] = Math.sin(t) * r * H;
-    }
-    const pGeo = new THREE.BufferGeometry();
-    pGeo.setAttribute('position', new THREE.BufferAttribute(pts, 3));
-    const pMat = new THREE.PointsMaterial({ color: '#7cf4ff', size: 0.012, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false });
-    const particles = new THREE.Points(pGeo, pMat);
-    scene.add(particles);
+    shadow.rotation.x = -Math.PI / 2;
+    shadow.position.y = -0.045 * H;
+    scene.add(shadow);
 
     // Rotação: arrasto horizontal; rolagem vertical continua com a página.
-    let viewMode: BodyView = 'auto';
+    let viewMode: BodyView = 'front';
     let angle = 0;
     let targetAngle = 0;
     let dragging = false;
@@ -699,17 +546,13 @@ export default function Body3D({
 
     const clock = new THREE.Clock();
     let raf = 0;
-    const tmp = new THREE.Vector3();
     const loop = () => {
       raf = requestAnimationFrame(loop);
       if (!visible || document.hidden) return;
       const dt = Math.min(0.05, clock.getDelta());
-      const t = clock.elapsedTime;
-      rig.holo.uniforms.uTime.value = t;
-      if (ghostRig) ghostRig.holo.uniforms.uTime.value = t;
 
       if (morphT < 1) {
-        morphT = Math.min(1, morphT + dt / 0.75);
+        morphT = Math.min(1, morphT + dt / 0.6);
         const e = morphT < 0.5 ? 2 * morphT * morphT : 1 - (-2 * morphT + 2) ** 2 / 2;
         current = lerpMeasures(from, target, e);
         rig.update(current);
@@ -717,42 +560,14 @@ export default function Body3D({
 
       idle += dt;
       if (viewMode === 'auto') {
-        if (!dragging && idle > 1.2) angle += dt * 0.45;
+        if (!dragging && idle > 1.2) angle += dt * 0.35;
       } else if (!dragging) {
         angle += (targetAngle - angle) * Math.min(1, dt * 6);
       }
       world.rotation.y = angle;
 
-      const sy = ((Math.sin(t * 0.9) + 1) / 2) * H * 0.98;
-      scan.position.y = sy;
-      scanMat.opacity = 0.25 + 0.35 * Math.sin(t * 0.9 + Math.PI / 2) ** 2;
-      const arr = pGeo.getAttribute('position').array as Float32Array;
-      for (let i = 0; i < N; i++) {
-        arr[i * 3 + 1] += dt * 0.05;
-        if (arr[i * 3 + 1] > H) arr[i * 3 + 1] = 0;
-      }
-      pGeo.getAttribute('position').needsUpdate = true;
-
       renderer.render(scene, camera);
 
-      if (labelRef.current) {
-        if (highlightKey) {
-          const p = rig.ringFront.get(highlightKey);
-          if (p) {
-            tmp.copy(p).applyMatrix4(world.matrixWorld).project(camera);
-            const lw = labelRef.current.offsetWidth;
-            const px = (tmp.x * 0.5 + 0.5) * wrap.clientWidth;
-            let x = px + 12;
-            if (x + lw > wrap.clientWidth - 6) x = px - lw - 12;
-            x = Math.max(6, x);
-            const y = (-tmp.y * 0.5 + 0.5) * wrap.clientHeight;
-            labelRef.current.style.opacity = '1';
-            labelRef.current.style.transform = `translate(${x}px, ${y - 12}px)`;
-          }
-        } else {
-          labelRef.current.style.opacity = '0';
-        }
-      }
     };
     loop();
 
@@ -769,14 +584,11 @@ export default function Body3D({
           ghostRig = null;
         }
         if (m) {
-          ghostRig = new Rig(m, '#ff4fd8', 0.45, 0.22, false);
+          ghostRig = new Rig(m, 'ghost');
           world.add(ghostRig.group);
         }
       },
-      setHighlight: (k) => {
-        highlightKey = k;
-        rig.highlight(k);
-      },
+      setHighlight: (k) => rig.highlight(k),
       setView: (v) => {
         viewMode = v;
         if (v !== 'auto') {
@@ -797,17 +609,9 @@ export default function Body3D({
       window.removeEventListener('pointercancel', onUp);
       rig.dispose();
       ghostRig?.dispose();
-      floor.geometry.dispose();
-      (floor.material as THREE.Material).dispose();
-      floorTex.dispose();
-      floorRings.forEach((r) => {
-        r.geometry.dispose();
-        (r.material as THREE.Material).dispose();
-      });
-      scanGeo.dispose();
-      scanMat.dispose();
-      pGeo.dispose();
-      pMat.dispose();
+      shadow.geometry.dispose();
+      (shadow.material as THREE.Material).dispose();
+      shadowTex.dispose();
       renderer.dispose();
       renderer.domElement.remove();
       api.current = null;
@@ -833,33 +637,32 @@ export default function Body3D({
   }, [view]);
 
   if (failed) {
-    return <div className="hint warn">Seu navegador não liberou WebGL, então o holograma não pode ser desenhado aqui.</div>;
+    return <div className="hint warn">Seu navegador não liberou WebGL, então o modelo 3D não pode ser desenhado aqui.</div>;
   }
 
   return (
     <div ref={wrapRef} className="holo">
-      <div className="holo-scan" />
-      <div
-        ref={labelRef}
-        style={{
-          position: 'absolute',
-          left: 0,
-          top: 0,
-          opacity: 0,
-          pointerEvents: 'none',
-          transition: 'opacity .2s',
-          padding: '4px 8px',
-          borderRadius: 8,
-          fontSize: 11.5,
-          fontFamily: 'var(--font-mono)',
-          background: 'rgba(3,8,18,.78)',
-          border: `1px solid ${highlight ? RING_META[highlight].color : 'transparent'}`,
-          color: highlight ? RING_META[highlight].color : undefined,
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {label}
-      </div>
+      {highlight && label && (
+        <div
+          style={{
+            position: 'absolute',
+            left: 12,
+            top: 12,
+            pointerEvents: 'none',
+            padding: '5px 10px',
+            borderRadius: 8,
+            fontSize: 12.5,
+            fontWeight: 500,
+            background: 'rgba(15,16,18,.85)',
+            border: '1px solid rgba(255,255,255,.12)',
+            color: '#ededee',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 8, background: '#7aa2f7', marginRight: 7 }} />
+          {label}
+        </div>
+      )}
     </div>
   );
 }

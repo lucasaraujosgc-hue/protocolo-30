@@ -78,12 +78,12 @@ export function Home({ go }: { go: (t: TabId) => void }) {
           <div className="label">{fmtFull(today)}</div>
           {ev.dayNumber >= 1 ? (
             <div className="hero-day">
-              <span className="gradient-text">DIA {ev.dayNumber}</span>
+              <span>Dia {ev.dayNumber}</span>
               <span className="of"> / 30</span>
             </div>
           ) : (
             <div className="hero-day">
-              <span className="gradient-text">EM {1 - ev.dayNumber} DIA{1 - ev.dayNumber > 1 ? 'S' : ''}</span>
+              <span>Começa em {1 - ev.dayNumber} dia{1 - ev.dayNumber > 1 ? 's' : ''}</span>
             </div>
           )}
         </div>
@@ -95,11 +95,9 @@ export function Home({ go }: { go: (t: TabId) => void }) {
 
       <div className="card glow hot">
         <div className="row" style={{ gap: 16, alignItems: 'center' }}>
-          <Ring value={ev.consumed.kcal} max={kcalTarget} size={150} stroke={12}>
+          <Ring value={ev.consumed.kcal} max={kcalTarget} size={148} stroke={9}>
             <div>
-              <div className="label" style={{ fontSize: 9 }}>
-                Consumido
-              </div>
+              <div className="tiny muted">Consumido</div>
               <div className="big-num" style={{ fontSize: 28 }}>
                 {fmtInt(ev.consumed.kcal)}
               </div>

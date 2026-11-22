@@ -60,14 +60,14 @@ export function Bank() {
     if (ok) toast('Plano de compensação ativado a partir de amanhã');
   };
 
-  const series = [{ points: bank.rows.map((r) => ({ date: r.date, value: r.cumulative })), color: '#2ee6ff', area: true }];
+  const series = [{ points: bank.rows.map((r) => ({ date: r.date, value: r.cumulative })), color: '#7aa2f7', area: true }];
   const rows = [...bank.rows].reverse();
 
   return (
     <div className="screen">
       <div className="card glow hot" style={{ textAlign: 'center' }}>
         <div className="label">Banco de calorias</div>
-        <div className="big-num" style={{ fontSize: 46, margin: '10px 0 4px', color: bank.projected >= 0 ? 'var(--green)' : 'var(--red)', textShadow: `0 0 26px ${bank.projected >= 0 ? 'rgba(61,255,168,.45)' : 'rgba(255,85,119,.45)'}` }}>
+        <div className="big-num" style={{ fontSize: 46, margin: '10px 0 4px', color: bank.projected >= 0 ? 'var(--green)' : 'var(--red)' }}>
           {bank.projected >= 0 ? '+' : '−'}
           {fmtInt(Math.abs(bank.projected))}
         </div>

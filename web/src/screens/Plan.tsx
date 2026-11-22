@@ -41,21 +41,21 @@ export function Plan() {
         <div className="grid2" style={{ gridTemplateColumns: 'repeat(3, 1fr)', margin: '12px 0' }}>
           <div className="stat">
             <span className="label">Proteína</span>
-            <span className="v num" style={{ color: '#ff8ae6' }}>
+            <span className="v num" style={{ color: 'var(--p)' }}>
               {fmtInt(total.p)}
               <small>/ {ev.target.p} g</small>
             </span>
           </div>
           <div className="stat">
             <span className="label">Carbo</span>
-            <span className="v num" style={{ color: '#7cf4ff' }}>
+            <span className="v num" style={{ color: 'var(--c)' }}>
               {fmtInt(total.c)}
               <small>/ {ev.target.c} g</small>
             </span>
           </div>
           <div className="stat">
             <span className="label">Gordura</span>
-            <span className="v num" style={{ color: '#ffd27a' }}>
+            <span className="v num" style={{ color: 'var(--f)' }}>
               {fmtInt(total.f)}
               <small>/ {ev.target.f} g</small>
             </span>

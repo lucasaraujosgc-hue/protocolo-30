@@ -25,6 +25,7 @@ import { useStore } from '../lib/store';
 import type { Measurement, MeasureKey } from '../lib/types';
 
 const Body3D = lazy(() => import('../components/Body3D'));
+const ACCENT = '#7aa2f7';
 
 export function Progress() {
   const { state, today, nowMin, targets, bank, saveSettings } = useStore();
@@ -32,7 +33,7 @@ export function Progress() {
   const [metric, setMetric] = useState<MeasureKey | 'bf'>('weight');
   const [snapIdx, setSnapIdx] = useState<number | null>(null);
   const [compare, setCompare] = useState(true);
-  const [view, setView] = useState<BodyView>('auto');
+  const [view, setView] = useState<BodyView>('front');
   const [hl, setHl] = useState<RingKey | null>('waistNavel');
   const [guide, setGuide] = useState(false);
 
@@ -73,13 +74,13 @@ export function Progress() {
   const available = MEASURES.filter((m) => seriesOf(ms, m.key).length > 0);
   const chartSeries =
     metric === 'bf'
-      ? [{ points: bfSeries, color: '#9b6bff', area: true }]
+      ? [{ points: bfSeries, color: ACCENT, area: true }]
       : metric === 'weight'
         ? [
-            { points: seriesOf(ms, 'weight'), color: '#2ee6ff', area: true },
-            { points: trend, color: '#ff4fd8', dashed: true, dots: false },
+            { points: seriesOf(ms, 'weight'), color: ACCENT, area: true },
+            { points: trend, color: '#9a9ea6', dashed: true, dots: false },
           ]
-        : [{ points: seriesOf(ms, metric), color: MEASURE_META[metric].color, area: true }];
+        : [{ points: seriesOf(ms, metric), color: ACCENT, area: true }];
 
   const ringValue = (k: RingKey, s = snap) => (s ? s.m[k] : undefined);
   const hlLabel =
@@ -129,21 +130,21 @@ export function Progress() {
 
       <div className="card glow hot">
         <div className="card-title">
-          <h3>Holograma corporal</h3>
+          <h3>Modelo 3D</h3>
           <span className="tiny muted">{snap ? fmtLong(snap.date) : 'sem medidas'}</span>
         </div>
         {snap ? (
           <>
-            <Suspense fallback={<div className="skeleton" style={{ height: 430 }} />}>
+            <Suspense fallback={<div className="skeleton" style={{ height: 420 }} />}>
               <Body3D measures={snap.m} ghost={compare && base && idx > 0 ? base.m : null} highlight={hl} view={view} label={hlLabel} />
             </Suspense>
             <div className="chips" style={{ marginTop: 10 }}>
               {(
                 [
-                  ['auto', 'Girando'],
                   ['front', 'Frente'],
                   ['side', 'Perfil'],
                   ['back', 'Costas'],
+                  ['auto', 'Girar'],
                 ] as [BodyView, string][]
               ).map(([v, l]) => (
                 <button key={v} className={`chip ${view === v ? 'on' : ''}`} onClick={() => setView(v)}>
@@ -164,7 +165,7 @@ export function Progress() {
                   <span>{fmtShort(snaps[0].date)}</span>
                   <span>{fmtShort(snaps[snaps.length - 1].date)}</span>
                 </div>
-                <Switch on={compare} onChange={setCompare} label="Comparar com o primeiro registro" hint="Contorno magenta = como você começou" />
+                <Switch on={compare} onChange={setCompare} label="Comparar com o primeiro registro" hint="A silhueta azulada mostra como você começou" />
               </div>
             )}
             <div className="legend" style={{ marginTop: 10 }}>
@@ -174,7 +175,6 @@ export function Progress() {
                 const est = snap.estimated.includes(k);
                 return (
                   <button key={k} className={hl === k ? 'on' : ''} onClick={() => setHl(hl === k ? null : k)}>
-                    <i style={{ background: RING_META[k].color, color: RING_META[k].color }} />
                     <span>
                       <span className="muted">{RING_META[k].label}</span>
                       <br />
@@ -199,7 +199,7 @@ export function Progress() {
             )}
           </>
         ) : (
-          <div className="hint">Registre a primeira medição (peso e medidas) para gerar o seu holograma.</div>
+          <div className="hint">Registre a primeira medição (peso e medidas) para gerar o seu modelo 3D.</div>
         )}
         <div className="row" style={{ marginTop: 12 }}>
           <button className="btn primary" style={{ flex: 1 }} onClick={() => setSheet({})}>
@@ -214,7 +214,6 @@ export function Progress() {
             <div className="hint">Peso todo dia; medidas uma vez por semana (domingo), de manhã, em jejum, depois de urinar. Fita justa sem apertar, paralela ao chão, 2 medições e a média. Membros do lado direito.</div>
             {MEASURES.map((m) => (
               <div key={m.key} className="list-row" style={{ alignItems: 'flex-start' }}>
-                <i style={{ width: 10, height: 10, borderRadius: 10, background: m.color, marginTop: 5, flex: 'none' }} />
                 <div>
                   <b>{m.label}</b>
                   <div className="tiny muted">{m.guide}</div>

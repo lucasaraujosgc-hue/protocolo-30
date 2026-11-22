@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Logo } from '../components/ui';
 import { api } from '../lib/api';
 
 export function Login({ onDone }: { onDone: () => void }) {
@@ -20,15 +21,13 @@ export function Login({ onDone }: { onDone: () => void }) {
   };
   return (
     <div className="center-screen">
-      <form className="login-card card glow hot" onSubmit={submit} style={{ padding: 26 }}>
-        <div className="orb" />
-        <div>
+      <form className="login-card card" onSubmit={submit} style={{ padding: 26 }}>
+        <div style={{ display: 'grid', justifyItems: 'center', gap: 10 }}>
+          <Logo size={40} />
           <div className="brand-name" style={{ fontSize: 18 }}>
-            PROTOCOLO 30
+            Protocolo 30
           </div>
-          <div className="tiny muted" style={{ marginTop: 6 }}>
-            Dieta · treino · banco de calorias · holograma
-          </div>
+          <div className="small muted">Dieta, treino e evolução</div>
         </div>
         <input className="input" type="password" autoComplete="current-password" placeholder="Senha de acesso" value={pw} onChange={(e) => setPw(e.target.value)} autoFocus />
         {err && <div className="small neg">{err}</div>}

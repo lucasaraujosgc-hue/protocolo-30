@@ -1,6 +1,6 @@
 # Protocolo 30
 
-Painel pessoal para seguir o plano de 30 dias pelo celular: cardápio com horários e macros, registro de cada refeição, treinos com dados do Apple Watch, banco de calorias com compensação automática, peso e medidas com datas, e um holograma 3D do corpo que muda conforme as medidas.
+Painel pessoal para seguir o plano de 30 dias pelo celular: cardápio com horários e macros, registro de cada refeição, treinos com dados do Apple Watch, banco de calorias com compensação automática, peso e medidas com datas, e um modelo 3D do corpo que muda conforme as medidas.
 
 Tudo roda no seu servidor. Não usa IA nem serviços externos: os cálculos são feitos no próprio app.
 
@@ -10,7 +10,7 @@ Tudo roda no seu servidor. Não usa IA nem serviços externos: os cálculos são
 - **Refeições**: o dia inteiro (qualquer data), com os totais de calorias, proteína, carboidrato e gordura, os ajustes em gramas quando há compensação, o que foi comido fora do plano e as substituições equivalentes.
 - **Treino**: spinning e musculação planejados por data, registro de calorias ativas e totais, FC média e esforço percebido (RPE), passos, calendário de 30 dias, zonas para configurar no Apple Watch e histórico.
 - **Banco**: saldo de calorias (crédito ou débito) em relação ao plano, extrato diário e um planejador de compensação em 1 a 14 dias, pela comida, por atividade extra ou pelos dois. O planejador respeita limites seguros. Também dá para escolher absorver o débito e aceitar um pequeno atraso.
-- **Progresso**: peso em jejum com tendência, ritmo semanal, holograma 3D com linha do tempo e comparação com o primeiro registro, gráficos de cada medida, composição corporal estimada, revisão do dia 14 e gasto calórico real estimado pela balança.
+- **Progresso**: peso em jejum com tendência, ritmo semanal, modelo 3D com linha do tempo e comparação com o primeiro registro, gráficos de cada medida, composição corporal estimada, revisão do dia 14 e gasto calórico real estimado pela balança.
 
 ## Como o banco de calorias calcula
 
@@ -76,7 +76,7 @@ Para desenvolver com recarga automática, deixe o servidor rodando (`APP_PASSWOR
 server/            API em Express: login por senha, validação e armazenamento em JSON com backup diário
 web/src/lib/       cardápio, alimentos, agenda de treinos e o motor de cálculo (banco, compensação, composição)
 web/src/screens/   telas: Hoje, Refeições, Treino, Banco, Progresso e Ajustes
-web/src/components holograma 3D (three.js), gráficos, folhas de registro
+web/src/components modelo 3D (three.js), gráficos, folhas de registro
 ```
 
 ## Aviso

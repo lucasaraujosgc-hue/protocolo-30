@@ -1,23 +1,16 @@
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
-import { useEffect, useId, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { addDays, fmtLong } from '../lib/dates';
 import { fmt1, fmtInt, numToInput, parseNum } from '../lib/format';
 import type { Totals } from '../lib/types';
 
-export function Logo({ size = 30 }: { size?: number }) {
-  const id = useId().replace(/:/g, '');
+export function Logo({ size = 28 }: { size?: number }) {
   return (
     <svg className="brand-mark" width={size} height={size} viewBox="0 0 40 40" aria-hidden>
-      <defs>
-        <linearGradient id={`lg${id}`} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#2ee6ff" />
-          <stop offset="0.6" stopColor="#9b6bff" />
-          <stop offset="1" stopColor="#ff4fd8" />
-        </linearGradient>
-      </defs>
-      <circle cx="20" cy="20" r="16" fill="none" stroke={`url(#lg${id})`} strokeWidth="3" strokeDasharray="78 22" strokeLinecap="round" />
-      <path d="M8 21h7l3-7 4 13 3-8h7" fill="none" stroke="#e9f2ff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="20" cy="20" r="16" fill="none" stroke="#ededee" strokeOpacity="0.35" strokeWidth="2.5" />
+      <path d="M20 4a16 16 0 0 1 16 16" fill="none" stroke="#ededee" strokeWidth="2.5" strokeLinecap="round" />
+      <path d="M9 21h6l3-7 4 13 3-8h6" fill="none" stroke="#ededee" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -26,18 +19,17 @@ export function Ring({
   value,
   max,
   size = 170,
-  stroke = 13,
+  stroke = 10,
   children,
-  colors = ['#2ee6ff', '#9b6bff'],
+  color = '#7aa2f7',
 }: {
   value: number;
   max: number;
   size?: number;
   stroke?: number;
   children?: ReactNode;
-  colors?: [string, string];
+  color?: string;
 }) {
-  const id = useId().replace(/:/g, '');
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
   const frac = max > 0 ? Math.min(1, value / max) : 0;
@@ -47,52 +39,21 @@ export function Ring({
     const t = requestAnimationFrame(() => setShown(frac));
     return () => cancelAnimationFrame(t);
   }, [frac]);
-  const ticks = Array.from({ length: 60 }, (_, i) => i);
   return (
     <div className="ring-wrap" style={{ width: size, height: size }}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-        <defs>
-          <linearGradient id={`rg${id}`} x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor={over ? '#ffc24d' : colors[0]} />
-            <stop offset="1" stopColor={over ? '#ff5577' : colors[1]} />
-          </linearGradient>
-          <filter id={`gl${id}`} x="-30%" y="-30%" width="160%" height="160%">
-            <feGaussianBlur stdDeviation="4" result="b" />
-            <feMerge>
-              <feMergeNode in="b" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
-        {ticks.map((i) => {
-          const a = (i / 60) * Math.PI * 2 - Math.PI / 2;
-          const r1 = r + stroke / 2 + 5;
-          const r2 = r1 + (i % 5 === 0 ? 5 : 2.5);
-          return (
-            <line
-              key={i}
-              x1={size / 2 + r1 * Math.cos(a)}
-              y1={size / 2 + r1 * Math.sin(a)}
-              x2={size / 2 + r2 * Math.cos(a)}
-              y2={size / 2 + r2 * Math.sin(a)}
-              stroke="rgba(120,200,255,0.25)"
-              strokeWidth={1}
-            />
-          );
-        })}
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth={stroke} />
         <circle
           cx={size / 2}
           cy={size / 2}
           r={r}
           fill="none"
-          stroke={`url(#rg${id})`}
+          stroke={over ? '#e5655e' : color}
           strokeWidth={stroke}
           strokeLinecap="round"
           strokeDasharray={`${c * shown} ${c}`}
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
-          filter={`url(#gl${id})`}
-          style={{ transition: 'stroke-dasharray 0.9s cubic-bezier(0.2,0.8,0.2,1)' }}
+          style={{ transition: 'stroke-dasharray 0.8s ease' }}
         />
       </svg>
       <div className="ring-center">{children}</div>

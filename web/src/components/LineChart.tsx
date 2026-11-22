@@ -128,29 +128,22 @@ export function LineChart({
       >
         <defs>
           <linearGradient id={`area${id}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor={series[0]?.color} stopOpacity="0.32" />
+            <stop offset="0" stopColor={series[0]?.color} stopOpacity="0.14" />
             <stop offset="1" stopColor={series[0]?.color} stopOpacity="0" />
           </linearGradient>
-          <filter id={`glow${id}`} x="-20%" y="-50%" width="140%" height="200%">
-            <feGaussianBlur stdDeviation="3" result="b" />
-            <feMerge>
-              <feMergeNode in="b" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
         </defs>
         {band && (
-          <rect x={L} width={w - L - R} y={y(band[1])} height={Math.max(0, y(band[0]) - y(band[1]))} fill="rgba(61,255,168,0.07)" />
+          <rect x={L} width={w - L - R} y={y(band[1])} height={Math.max(0, y(band[0]) - y(band[1]))} fill="rgba(76,191,134,0.07)" />
         )}
         {ticks.map((t) => (
           <g key={t}>
-            <line x1={L} x2={w - R} y1={y(t)} y2={y(t)} stroke="rgba(120,200,255,0.09)" strokeDasharray="3 4" />
-            <text x={L - 6} y={y(t) + 3.5} textAnchor="end" fontSize="10" fill="#5a6a86" fontFamily="JetBrains Mono">
+            <line x1={L} x2={w - R} y1={y(t)} y2={y(t)} stroke="rgba(255,255,255,0.06)" />
+            <text x={L - 6} y={y(t) + 3.5} textAnchor="end" fontSize="10" fill="#666a72" fontFamily="Inter">
               {fmtV(t)}
             </text>
           </g>
         ))}
-        {zero && <line x1={L} x2={w - R} y1={y(0)} y2={y(0)} stroke="rgba(233,242,255,0.35)" />}
+        {zero && <line x1={L} x2={w - R} y1={y(0)} y2={y(0)} stroke="rgba(255,255,255,0.25)" />}
         {series.map((s, si) => (
           <g key={si}>
             {s.area && s.points.length > 1 && (
@@ -164,11 +157,10 @@ export function LineChart({
                 d={pathOf(s.points)}
                 fill="none"
                 stroke={s.color}
-                strokeWidth={s.dashed ? 1.6 : 2.4}
+                strokeWidth={s.dashed ? 1.5 : 2}
                 strokeDasharray={s.dashed ? '5 5' : undefined}
                 strokeLinejoin="round"
                 strokeLinecap="round"
-                filter={s.dashed ? undefined : `url(#glow${id})`}
               />
             )}
             {(s.dots ?? true) &&
@@ -178,20 +170,20 @@ export function LineChart({
         ))}
         {hp && (
           <g>
-            <line x1={x(hp.date)} x2={x(hp.date)} y1={T} y2={height - B} stroke="rgba(233,242,255,0.25)" />
-            <circle cx={x(hp.date)} cy={y(hp.value)} r={5} fill="#03050b" stroke={series[0]?.color} strokeWidth={2} />
+            <line x1={x(hp.date)} x2={x(hp.date)} y1={T} y2={height - B} stroke="rgba(255,255,255,0.18)" />
+            <circle cx={x(hp.date)} cy={y(hp.value)} r={4.5} fill="#17181b" stroke={series[0]?.color} strokeWidth={2} />
           </g>
         )}
-        <text x={L} y={height - 6} fontSize="10" fill="#5a6a86" fontFamily="JetBrains Mono">
+        <text x={L} y={height - 6} fontSize="10" fill="#666a72" fontFamily="Inter">
           {fmtShort(d0)}
         </text>
         {mid && mid !== d0 && mid !== d1 && (
-          <text x={x(mid)} y={height - 6} fontSize="10" fill="#5a6a86" textAnchor="middle" fontFamily="JetBrains Mono">
+          <text x={x(mid)} y={height - 6} fontSize="10" fill="#666a72" textAnchor="middle" fontFamily="Inter">
             {fmtShort(mid)}
           </text>
         )}
         {d1 !== d0 && (
-          <text x={w - R} y={height - 6} fontSize="10" fill="#5a6a86" textAnchor="end" fontFamily="JetBrains Mono">
+          <text x={w - R} y={height - 6} fontSize="10" fill="#666a72" textAnchor="end" fontFamily="Inter">
             {fmtShort(d1)}
           </text>
         )}

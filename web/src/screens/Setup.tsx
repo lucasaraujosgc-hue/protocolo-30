@@ -42,9 +42,9 @@ export function Setup({ onDone }: { onDone: (s: RawState) => void }) {
 
   return (
     <div className="center-screen">
-      <div className="card glow hot" style={{ width: '100%', maxWidth: 440, padding: 22 }}>
-        <div className="brand-name" style={{ fontSize: 16 }}>
-          CONFIGURAÇÃO INICIAL
+      <div className="card" style={{ width: '100%', maxWidth: 440, padding: 22 }}>
+        <div className="brand-name" style={{ fontSize: 18 }}>
+          Configuração inicial
         </div>
         <div className="small muted" style={{ margin: '6px 0 16px' }}>
           Esses dados ficam só no seu servidor. O cardápio, os treinos e as metas já vêm do plano.

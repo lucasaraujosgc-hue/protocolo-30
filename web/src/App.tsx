@@ -46,7 +46,7 @@ export function App() {
   if (phase === 'loading') {
     return (
       <div className="center-screen">
-        <div className="orb" />
+        <div className="spinner" />
       </div>
     );
   }
@@ -97,7 +97,7 @@ function Shell() {
           <div className="brand">
             <Logo />
             <div>
-              <div className="brand-name">PROTOCOLO 30</div>
+              <div className="brand-name">Protocolo 30</div>
               <div className="brand-sub">{state.profile?.name ? state.profile.name : 'painel pessoal'}</div>
             </div>
           </div>
@@ -117,7 +117,7 @@ function Shell() {
         <div className="tabbar-inner">
           {TABS.map(({ id, label, icon: Icon }) => (
             <button key={id} className={`tab ${tab === id ? 'on' : ''}`} onClick={() => go(id)}>
-              <Icon size={21} />
+              <Icon size={21} strokeWidth={1.8} />
               {label}
             </button>
           ))}
