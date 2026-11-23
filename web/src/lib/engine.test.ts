@@ -97,6 +97,18 @@ describe('banco de calorias', () => {
   const today = '2026-11-26';
   const opts = { today, nowMin: 12 * 60 };
 
+  it('o consumo do dia só conta o que foi registrado, mesmo depois do horário', () => {
+    let s = baseState();
+    const at7 = { today: START, nowMin: 7 * 60 };
+    expect(evalDay(s, START, at7).consumed.kcal).toBe(0);
+    expect(Math.round(evalDay(s, START, at7).actual.kcal)).toBe(2253);
+    s = withDay(s, START, (d) => {
+      d.meals.cafe = makeMealLog(PLAN, MEAL.cafe, 'planned');
+    });
+    expect(Math.round(evalDay(s, START, at7).consumed.kcal)).toBe(457);
+    expect(evalDay(s, START, at7).balance).toBe(0);
+  });
+
   it('dia sem registros = plano seguido = saldo zero', () => {
     const s = baseState();
     const ev = evalDay(s, START, opts);

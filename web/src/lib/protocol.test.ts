@@ -207,6 +207,7 @@ describe('exportação para IA', () => {
     expect(d1.refeicoes.find((r: { id: string }) => r.id === 'almoco').registro).toBe('a_mais');
     expect(d1.treinos[0]).toMatchObject({ planejado: 'Musculação · pernas', situacao: 'feito', kcalAtivas: 300, metaKcalAtivas: 280, desvioKcal: 20 });
     expect(d1.banco.comida).toBe(-140);
+    expect(d1.registrado.kcal).toBe(d1.refeicoes.find((r: { id: string }) => r.id === 'almoco').kcal);
     expect(data.medidas[0]).toMatchObject({ pesoKg: 100, cinturaUmbigoCm: 100 });
     expect(data.alimentosDisponiveis.length).toBeGreaterThan(30);
     // o arquivo inteiro pode ser subido em "Atualizar protocolo": usa protocoloAtual

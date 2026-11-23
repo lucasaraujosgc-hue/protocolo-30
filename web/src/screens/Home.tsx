@@ -196,7 +196,8 @@ export function Home({ go }: { go: (t: TabId) => void }) {
 
       {pendingBefore.length > 0 && (
         <div className="hint">
-          Sem registro: {pendingBefore.map((id) => plan.mealById[id]?.short ?? id).join(', ')}. Sem registro, a refeição conta como seguida.{' '}
+          Sem registro: {pendingBefore.map((id) => plan.mealById[id]?.short ?? id).join(', ')}. O consumo só conta o que você registra; no banco, a refeição sem
+          registro vale como seguida.{' '}
           <button className="cyan" style={{ textDecoration: 'underline' }} onClick={() => go('plano')}>
             Revisar
           </button>

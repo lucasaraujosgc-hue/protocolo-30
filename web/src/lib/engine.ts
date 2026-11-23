@@ -201,8 +201,8 @@ export interface MealEval {
   planned: Totals;
   actual: Totals;
   log?: MealLog;
+  /** O horário da refeição já passou (no banco, sem registro ela conta como seguida). */
   passed: boolean;
-  consumed: boolean;
 }
 
 export interface DayEval {
@@ -220,7 +220,9 @@ export interface DayEval {
   orphanMeals: { id: MealId; log: MealLog }[];
   extras: Totals;
   planned: Totals;
+  /** Total do dia para o banco: refeição sem registro conta como seguida (hoje: projeção do dia inteiro). */
   actual: Totals;
+  /** Só o que foi registrado: refeições registradas, extras e registros fora do cardápio. */
   consumed: Totals;
   foodDev: number;
   sessions: SessionEval[];
@@ -263,7 +265,7 @@ export function evalDay(state: AppState, date: string, opts: EvalOpts): DayEval 
     const log = day.meals[meal.id];
     const actual = log ? totalsOf(log) : planned;
     const passed = isPast || (isToday && minutesOf(meal.time) <= opts.nowMin);
-    return { meal, planned, actual, log, passed, consumed: !!log || passed };
+    return { meal, planned, actual, log, passed };
   });
   const orphanMeals = Object.entries(day.meals)
     .filter(([id]) => !plan.mealById[id])
@@ -275,12 +277,11 @@ export function evalDay(state: AppState, date: string, opts: EvalOpts): DayEval 
     meals.reduce((acc, m) => addT(acc, m.actual), ZERO),
     addT(extras, orphanT),
   );
-  const consumed = isFuture
-    ? addT(extras, orphanT)
-    : addT(
-        meals.filter((m) => m.consumed).reduce((acc, m) => addT(acc, m.actual), ZERO),
-        addT(extras, orphanT),
-      );
+  // O anel de "Consumido" só anda com registro: o horário passar não conta como comida.
+  const consumed = addT(
+    meals.filter((m) => m.log).reduce((acc, m) => addT(acc, m.actual), ZERO),
+    addT(extras, orphanT),
+  );
   const foodDev = isFuture ? 0 : target.kcal - Math.round(actual.kcal);
 
   const plannedList = plannedSessions(protocol.training, state.settings.startDate, date);

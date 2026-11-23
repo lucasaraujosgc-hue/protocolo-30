@@ -53,6 +53,8 @@ export function Ring({
           strokeLinecap="round"
           strokeDasharray={`${c * shown} ${c}`}
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
+          // Com zero, a ponta arredondada desenharia um ponto solto no topo do anel.
+          opacity={shown > 0 ? 1 : 0}
           style={{ transition: 'stroke-dasharray 0.8s ease' }}
         />
       </svg>

@@ -72,7 +72,8 @@ function promptText(state: AppState, today: string): string {
 
 const COMO_LER: Record<string, string> = {
   datas: 'Datas no formato AAAA-MM-DD, no fuso do celular. "dia" é o dia do protocolo (1 = início).',
-  'dias[].consumo': 'Total do dia. Refeição já passada e sem registro conta como seguida (exatamente o cardápio).',
+  'dias[].consumo': 'Total do dia usado no banco. Refeição sem registro conta como seguida (exatamente o cardápio); no dia de hoje, é a previsão do dia inteiro.',
+  'dias[].registrado': 'Só o que foi registrado no app (refeições marcadas, extras). A diferença para "consumo" são refeições sem registro.',
   'dias[].refeicoes[].registro':
     'seguiu = comeu o cardápio; seguiu_com_corte = comeu o cardápio já com os cortes do dia (compensação ou meta abaixo do cardápio); a_mais = cardápio + itens extras; a_menos = fração do prato (fracaoComida); pulou = 0 kcal; trocou = comeu outra coisa (itens); sem_registro = passou do horário sem registro (conta como seguida); ainda_nao = horário ainda não chegou.',
   'dias[].treinos':
@@ -189,6 +190,7 @@ function exportDay(day: DayEval, cumulative: number | null, raw: DayLog | undefi
     meta: { kcal: day.target.kcal, p: day.target.p, c: day.target.c, f: day.target.f, passos: day.target.steps },
     cardapioKcal: day.plan.kcal,
     consumo: { kcal: r0(day.actual.kcal), p: r1(day.actual.p), c: r1(day.actual.c), f: r1(day.actual.f) },
+    registrado: { kcal: r0(day.consumed.kcal), p: r1(day.consumed.p), c: r1(day.consumed.c), f: r1(day.consumed.f) },
     refeicoes: day.meals.map((_, i) => exportMeal(day, i)),
     foraDoPlano: raw?.extras.length
       ? raw.extras.map((x) => compact({ nome: x.name, qtd: x.qty, gramas: x.grams, kcal: r0(x.kcal), p: r1(x.p), c: r1(x.c), f: r1(x.f), registradoEm: x.at }))

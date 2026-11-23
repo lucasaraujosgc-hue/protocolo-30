@@ -28,7 +28,7 @@ export function Plan() {
 
       <div className="card glow">
         <div className="row between">
-          <span className="label">Total do dia {ev.isFuture ? '(plano)' : ''}</span>
+          <span className="label">{ev.isFuture ? 'Total do dia (plano)' : ev.isToday ? 'Previsto para hoje' : 'Total do dia'}</span>
           {!ev.isFuture && ev.inProtocol && (
             <span className="small">
               Saldo comida <Delta v={ev.foodDev} />
@@ -39,6 +39,11 @@ export function Plan() {
           <span className="big-num">{fmtInt(total.kcal)}</span>
           <span className="muted small">/ {fmtInt(ev.target.kcal - compFood)} kcal</span>
         </div>
+        {ev.isToday && (
+          <div className="tiny muted" style={{ marginTop: 2 }}>
+            Registrado até agora: {fmtInt(ev.consumed.kcal)} kcal. O restante considera o cardápio.
+          </div>
+        )}
         <div className="grid2" style={{ gridTemplateColumns: 'repeat(3, 1fr)', margin: '12px 0' }}>
           <div className="stat">
             <span className="label">Proteína</span>
