@@ -21,12 +21,28 @@ export interface LogItem {
 
 export type MealStatus = 'planned' | 'more' | 'less' | 'skipped' | 'swapped';
 
+/** Quantidade comida de um item do prato, quando foi diferente do previsto. */
+export interface PortionLog {
+  /** Posição do item na refeição. */
+  i: number;
+  /** Id do alimento (confere se o cardápio mudou depois do registro). */
+  food?: string;
+  /** Gramas comidas (itens da tabela de alimentos). */
+  grams?: number;
+  /** Fração da porção (itens com calorias próprias): 0 = não comeu, 1 = normal. */
+  mult?: number;
+}
+
 export interface MealLog extends Totals {
   status: MealStatus;
-  /** Itens extras (a mais) ou substitutos (troquei). */
+  /** Alimentos fora do prato (a mais/a menos) ou o que comeu no lugar (troquei). */
   items?: LogItem[];
-  /** Fração comida quando status = less (0–1). */
+  /** Itens do prato com quantidade diferente do previsto (a mais/a menos). */
+  portions?: PortionLog[];
+  /** Registros antigos: fração do prato comida (0–1). */
   fraction?: number;
+  /** Horário em que comeu (HH:MM). Atrasos e adiantamentos ajustam as próximas refeições do dia. */
+  time?: string;
   note?: string;
   at: string;
 }

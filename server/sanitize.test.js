@@ -46,6 +46,30 @@ describe('servidor · dia e configurações', () => {
     expect(Object.keys(d.meals)).toEqual(['ceia']);
   });
 
+  it('guarda quantidades por item e o horário em que comeu', () => {
+    const d = sanitizeDay({
+      meals: {
+        almoco: {
+          status: 'less',
+          kcal: 500,
+          p: 40,
+          c: 50,
+          f: 10,
+          time: '14:05',
+          portions: [{ i: 2, food: 'feijao', grams: 0 }, { i: 0, mult: 0.5 }, { i: 99, grams: 1 }, { i: 1 }],
+          items: [{ name: 'Refrigerante comum · 1 copo (250 ml)', qty: 1, kcal: 106, p: 0, c: 27, f: 0 }],
+        },
+        lanche: { status: 'planned', kcal: 300, p: 1, c: 1, f: 1, time: '25:00' },
+      },
+      extras: [],
+      exercises: [],
+    });
+    expect(d.meals.almoco.time).toBe('14:05');
+    expect(d.meals.almoco.portions).toEqual([{ i: 2, food: 'feijao', grams: 0 }, { i: 0, mult: 0.5 }]);
+    expect(d.meals.almoco.items).toHaveLength(1);
+    expect(d.meals.lanche.time).toBeUndefined();
+  });
+
   it('configurações novas só com a data; as antigas continuam aceitas', () => {
     expect(sanitizeSettings({ startDate: START })).toEqual({ startDate: START });
     const legacy = sanitizeSettings({ startDate: START, targets: [{ from: START, kcal: 2250, p: 190, c: 240, f: 55, steps: 10000 }], spinDays: [2, 3] });

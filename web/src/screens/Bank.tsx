@@ -5,17 +5,9 @@ import { Delta, Segmented } from '../components/ui';
 import { addDays, fmtLong, fmtShort } from '../lib/dates';
 import { compensationToday, currentWeight, dayCuts, planCompensation, type BankRow } from '../lib/engine';
 import { fmtInt } from '../lib/format';
+import { blocksMinutes } from '../lib/schedule';
 import { useStore } from '../lib/store';
 import type { CompMode } from '../lib/types';
-
-/** Minutos da sessão Z2 do protocolo (ex.: "Treino · 22 min · …"), para converter calorias em minutos extras. */
-function z2Minutes(blocks: string[]): number {
-  const total = blocks.reduce((a, b) => {
-    const m = b.match(/(\d+)\s*min/);
-    return a + (m ? Number(m[1]) : 0);
-  }, 0);
-  return total > 0 ? total : 30;
-}
 
 export function Bank() {
   const { state, today, nowMin, bank, protocol, plan: menu, targets, saveCompensation, saveDay, toast } = useStore();
@@ -40,7 +32,7 @@ export function Bank() {
         foodShare: 0.5,
         plan: menu,
         weightKg: weight,
-        z2PerMin: targets.z2.value / z2Minutes(protocol.training.sessions.z2.blocks),
+        z2PerMin: targets.z2.value / blocksMinutes(protocol.training.sessions.z2.blocks),
       }),
     [debt, mode, days, menu, weight, targets, protocol],
   );

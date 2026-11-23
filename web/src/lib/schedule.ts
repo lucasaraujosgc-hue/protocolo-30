@@ -60,6 +60,20 @@ export function defaultTraining(): Training {
   };
 }
 
+/** Duração considerada para a musculação (não vem no protocolo). */
+export const LIFT_MINUTES = 75;
+
+/** Minutos de uma sessão a partir dos blocos ("Aquecimento · 5 min", "3× (Treino 4 min + Recuperação 3 min)"). */
+export function blocksMinutes(blocks: string[]): number {
+  let total = 0;
+  for (const b of blocks) {
+    const rep = b.match(/^\s*(\d+)\s*[×x]/i);
+    const mins = [...b.matchAll(/(\d+(?:[.,]\d+)?)\s*min/gi)].reduce((a, m) => a + Number(m[1].replace(',', '.')), 0);
+    total += (rep ? Number(rep[1]) : 1) * mins;
+  }
+  return total > 0 ? Math.round(total) : 30;
+}
+
 export interface PlannedSession {
   key: PlannedKey;
   kind: ExerciseKind;

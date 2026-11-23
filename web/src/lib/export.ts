@@ -74,8 +74,10 @@ const COMO_LER: Record<string, string> = {
   datas: 'Datas no formato AAAA-MM-DD, no fuso do celular. "dia" é o dia do protocolo (1 = início).',
   'dias[].consumo': 'Total do dia usado no banco. Refeição sem registro conta como seguida (exatamente o cardápio); no dia de hoje, é a previsão do dia inteiro.',
   'dias[].registrado': 'Só o que foi registrado no app (refeições marcadas, extras). A diferença para "consumo" são refeições sem registro.',
+  'dias[].refeicoes[].quantidades': 'Itens do prato comidos em quantidade diferente da prevista (comeuG = 0: não comeu). "itens" são alimentos fora do prato (a mais) ou o que comeu no lugar (trocou).',
+  'dias[].refeicoes[].comeuAs': 'Horário em que comeu. Atrasos ou adiantamentos de 15 min ou mais ajustam as próximas refeições do dia (horarioDoDia), respeitando os treinos e o limite das 20:30.',
   'dias[].refeicoes[].registro':
-    'seguiu = comeu o cardápio; seguiu_com_corte = comeu o cardápio já com os cortes do dia (compensação ou meta abaixo do cardápio); a_mais = cardápio + itens extras; a_menos = fração do prato (fracaoComida); pulou = 0 kcal; trocou = comeu outra coisa (itens); sem_registro = passou do horário sem registro (conta como seguida); ainda_nao = horário ainda não chegou.',
+    'seguiu = comeu o cardápio; seguiu_com_corte = comeu o cardápio já com os cortes do dia (compensação ou meta abaixo do cardápio); a_mais / a_menos = comeu mais ou menos que o prato do dia (veja quantidades e itens; registros antigos usam fracaoComida); pulou = 0 kcal; trocou = comeu outra coisa (itens); sem_registro = passou do horário sem registro (conta como seguida); ainda_nao = horário ainda não chegou.',
   'dias[].treinos':
     'planejado = sessão prevista pelo protocolo; extra = treino fora da agenda. kcalAtivas vêm do Apple Watch. metaKcalAtivas é o gasto esperado da sessão (calibrada pela mediana das 3 primeiras sessões do tipo, quando "calibrada" = true).',
   'dias[].banco':
@@ -144,10 +146,19 @@ function exportMeal(ev: DayEval, i: number) {
     registro = REGISTRO[log.status];
     if (log.status === 'planned' && Math.round(m.planned.kcal) - log.kcal > 1) registro = 'seguiu_com_corte';
   } else registro = m.passed ? 'sem_registro' : 'ainda_nao';
+  const portionsOut = log?.portions?.length
+    ? log.portions.map((x) => {
+        const it = m.meal.items[x.i];
+        const name = it ? (it.label ?? (it.food ? (ev.plan.foods[it.food]?.name ?? it.food) : (it.free ?? 'item'))) : `item ${x.i + 1}`;
+        return compact({ item: name, previstoG: it?.grams, comeuG: x.grams, fracaoDaPorcao: x.mult });
+      })
+    : undefined;
   return compact({
     id: m.meal.id,
     nome: m.meal.name,
-    horario: m.meal.time,
+    horarioDoCardapio: m.meal.time,
+    horarioDoDia: m.time !== m.meal.time ? m.time : undefined,
+    comeuAs: log?.time,
     registro,
     kcal: r0(m.actual.kcal),
     p: r1(m.actual.p),
@@ -157,7 +168,8 @@ function exportMeal(ev: DayEval, i: number) {
     itens: log?.items?.length
       ? log.items.map((it) => compact({ nome: it.name, gramas: it.grams, qtd: it.qty, kcal: r0(it.kcal), p: r1(it.p), c: r1(it.c), f: r1(it.f) }))
       : undefined,
-    fracaoComida: log?.status === 'less' ? log.fraction : undefined,
+    quantidades: portionsOut,
+    fracaoComida: log?.status === 'less' && !log.portions ? log.fraction : undefined,
     obs: log?.note,
     registradoEm: log?.at,
   });

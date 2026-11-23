@@ -1,8 +1,8 @@
-import { addDays, diffDays, minutesOf, rangeDates } from './dates';
+import { addDays, diffDays, hhmm, minutesOf, rangeDates } from './dates';
 import { sumItems } from './foods';
 import { mealTotals, planOf, reductionPlan, type Meal, type Plan, type ReductionStep } from './plan';
 import { protocolFor, sortProtocols } from './protocol';
-import { plannedSessions, type PlannedSession } from './schedule';
+import { blocksMinutes, LIFT_MINUTES, plannedSessions, type PlannedSession } from './schedule';
 import type {
   AppState,
   CompMode,
@@ -15,6 +15,7 @@ import type {
   MealStatus,
   Measurement,
   MeasureKey,
+  PortionLog,
   Profile,
   Protocol,
   SpinTemplate,
@@ -74,23 +75,54 @@ export function mealWithCuts(meal: Meal, cuts: ReductionStep[] = []): Meal {
   };
 }
 
+/** O prato do dia (com cortes) com as quantidades que você mudou em cada item. */
+export function plateOf(meal: Meal, cuts: ReductionStep[] = [], portions: PortionLog[] = []): Meal {
+  const base = mealWithCuts(meal, cuts);
+  if (!portions.length) return base;
+  return {
+    ...base,
+    items: base.items.map((it, i) => {
+      const p = portions.find((x) => x.i === i && (x.food ?? null) === (it.food ?? null));
+      if (!p) return it;
+      if (it.food && it.grams !== undefined && p.grams !== undefined) return { ...it, grams: Math.max(0, p.grams) };
+      if (p.mult !== undefined && typeof it.kcal === 'number') {
+        const k = Math.max(0, p.mult);
+        return { ...it, kcal: it.kcal * k, p: (it.p ?? 0) * k, c: (it.c ?? 0) * k, f: (it.f ?? 0) * k };
+      }
+      return it;
+    }),
+  };
+}
+
 export function makeMealLog(
   plan: Plan,
   meal: Meal,
   status: MealStatus,
-  opts: { items?: LogItem[]; fraction?: number; note?: string; cuts?: ReductionStep[] } = {},
+  opts: {
+    items?: LogItem[];
+    portions?: PortionLog[];
+    fraction?: number;
+    note?: string;
+    cuts?: ReductionStep[];
+    time?: string;
+  } = {},
 ): MealLog {
   // "Segui" com cortes do dia (compensação ou meta abaixo do cardápio) registra o prato reduzido.
-  const planned = mealTotals(plan, mealWithCuts(meal, opts.cuts));
-  let t: Totals = planned;
+  const plate = mealWithCuts(meal, opts.cuts);
+  let t: Totals = mealTotals(plan, plate);
   let items: LogItem[] | undefined;
+  let portions: PortionLog[] | undefined;
   let fraction: number | undefined;
-  if (status === 'more') {
-    items = opts.items ?? [];
-    t = addT(planned, sumItems(items));
-  } else if (status === 'less') {
-    fraction = Math.min(1, Math.max(0, opts.fraction ?? 0.5));
-    t = scaleT(planned, fraction);
+  if (status === 'more' || status === 'less') {
+    items = opts.items?.length ? opts.items : undefined;
+    portions = opts.portions?.length ? opts.portions : undefined;
+    if (portions) t = mealTotals(plan, plateOf(meal, opts.cuts, portions));
+    else if (opts.fraction !== undefined) {
+      // Formato antigo: fração do prato inteiro.
+      fraction = Math.min(1, Math.max(0, opts.fraction));
+      t = scaleT(t, fraction);
+    }
+    if (items) t = addT(t, sumItems(items));
   } else if (status === 'skipped') {
     t = ZERO;
   } else if (status === 'swapped') {
@@ -98,7 +130,99 @@ export function makeMealLog(
     t = sumItems(items);
   }
   const r = roundT(t);
-  return { status, ...r, items, fraction, note: opts.note || undefined, at: new Date().toISOString() };
+  return { status, ...r, items, portions, fraction, time: opts.time, note: opts.note || undefined, at: new Date().toISOString() };
+}
+
+/* ------------------------------------------------------ horários do dia */
+
+export interface MealTime {
+  /** Horário previsto hoje (já ajustado) ou o horário em que comeu. */
+  time: string;
+  /** Minutos de diferença para o horário do cardápio. */
+  shift: number;
+  /** Ficou perto demais da refeição anterior: fazer uma versão leve ou juntar com ela. */
+  tight: boolean;
+}
+
+/** Diferenças menores que isso contam como "no horário". */
+export const SHIFT_MIN = 15;
+/** Intervalo mínimo desejado entre refeições ao empurrar horários. */
+export const MEAL_GAP = 90;
+/** Nenhuma refeição ajustada passa disso (você dorme até 21:30), a não ser que o cardápio já preveja mais tarde. */
+export const LAST_MEAL = '20:30';
+
+export interface SessionSpan {
+  start: number;
+  end: number;
+}
+
+export function sessionSpans(protocol: Protocol, sessions: PlannedSession[]): SessionSpan[] {
+  return sessions.map((s) => {
+    const start = minutesOf(s.time);
+    const dur = s.kind === 'spinning' ? blocksMinutes(protocol.training.sessions[s.template ?? 'livre']?.blocks ?? []) : LIFT_MINUTES;
+    return { start, end: start + dur };
+  });
+}
+
+/**
+ * Horários do dia: se você comeu uma refeição atrasado (ou adiantado), as próximas andam junto.
+ * Regras: os treinos do dia seguram o horário (o pré-treino não passa do início do treino − 30 min e nada
+ * cruza o treino); o atraso de antes do treino não empurra o pós-treino; nenhuma refeição passa das 20:30;
+ * e, quando dá, fica pelo menos 1h30 depois da anterior.
+ */
+export function daySchedule(meals: Meal[], logs: Record<MealId, MealLog | undefined>, sessions: SessionSpan[]): MealTime[] {
+  const out: MealTime[] = [];
+  const planned = meals.map((m) => minutesOf(m.time));
+  const cap = Math.max(minutesOf(LAST_MEAL), ...planned);
+  let last: { planned: number; time: number; shift: number } | null = null;
+  let prev: { planned: number; time: number } | null = null;
+  meals.forEach((m, idx) => {
+    const P = planned[idx];
+    const log = logs[m.id];
+    if (log?.time) {
+      const T = minutesOf(log.time);
+      out.push({ time: log.time, shift: T - P, tight: false });
+      last = { planned: P, time: T, shift: Math.abs(T - P) >= SHIFT_MIN ? T - P : 0 };
+      prev = { planned: P, time: T };
+      return;
+    }
+    const L = last as { planned: number; time: number; shift: number } | null;
+    // Treinos que ainda não começaram quando a última refeição registrada foi comida seguram o horário.
+    const ahead = sessions.filter((sp) => !L || L.time < sp.start);
+    let d = L ? L.shift : 0;
+    if (L && d !== 0 && ahead.some((sp) => sp.start > L.planned && sp.start <= P)) d = 0;
+    let lo = -Infinity;
+    let hi = cap;
+    for (const sp of ahead) {
+      if (P <= sp.start) hi = Math.min(hi, Math.max(P, sp.start - 30));
+      else lo = Math.max(lo, Math.min(P, sp.end));
+    }
+    let t = Math.min(Math.max(P + d, lo), hi);
+    let tight = false;
+    const pv = prev as { planned: number; time: number } | null;
+    if (pv) {
+      const gap = Math.min(MEAL_GAP, Math.max(0, P - pv.planned));
+      if (t < pv.time + gap) {
+        const want = pv.time + gap;
+        if (want <= hi) t = want;
+        else {
+          t = Math.max(hi, pv.time);
+          tight = true;
+        }
+      }
+    }
+    t = Math.round(t / 5) * 5;
+    out.push({ time: hhmm(t), shift: t - P, tight });
+    prev = { planned: P, time: t };
+  });
+  return out;
+}
+
+/** Horário sugerido ao registrar: agora, se estiver perto do previsto (hoje); senão, o horário previsto. */
+export function defaultMealTime(me: Pick<MealEval, 'time' | 'log'>, isToday: boolean, nowMin: number): string {
+  if (me.log?.time) return me.log.time;
+  if (isToday && Math.abs(nowMin - minutesOf(me.time)) <= 90) return hhmm(nowMin);
+  return me.time;
 }
 
 /* ------------------------------------------------------- metas de exercício */
@@ -201,6 +325,12 @@ export interface MealEval {
   planned: Totals;
   actual: Totals;
   log?: MealLog;
+  /** Horário do dia (ajustado por atrasos/adiantamentos) ou o horário em que comeu. */
+  time: string;
+  /** Minutos de diferença para o horário do cardápio. */
+  shift: number;
+  /** Ficou perto demais da refeição anterior. */
+  tight: boolean;
   /** O horário da refeição já passou (no banco, sem registro ela conta como seguida). */
   passed: boolean;
 }
@@ -260,12 +390,15 @@ export function evalDay(state: AppState, date: string, opts: EvalOpts): DayEval 
   const isFuture = date > opts.today;
   const target = protocol.targets;
 
-  const meals: MealEval[] = plan.meals.map((meal) => {
+  const plannedList = plannedSessions(protocol.training, state.settings.startDate, date);
+  const schedule = daySchedule(plan.meals, day.meals, sessionSpans(protocol, plannedList));
+  const meals: MealEval[] = plan.meals.map((meal, i) => {
     const planned = mealTotals(plan, meal);
     const log = day.meals[meal.id];
     const actual = log ? totalsOf(log) : planned;
-    const passed = isPast || (isToday && minutesOf(meal.time) <= opts.nowMin);
-    return { meal, planned, actual, log, passed };
+    const { time, shift, tight } = schedule[i];
+    const passed = isPast || (isToday && minutesOf(time) <= opts.nowMin);
+    return { meal, planned, actual, log, time, shift, tight: tight && !log, passed };
   });
   const orphanMeals = Object.entries(day.meals)
     .filter(([id]) => !plan.mealById[id])
@@ -284,7 +417,6 @@ export function evalDay(state: AppState, date: string, opts: EvalOpts): DayEval 
   );
   const foodDev = isFuture ? 0 : target.kcal - Math.round(actual.kcal);
 
-  const plannedList = plannedSessions(protocol.training, state.settings.startDate, date);
   const used = new Set<string>();
   const sessions: SessionEval[] = plannedList.map((p) => {
     const log = day.exercises.find((e) => e.plannedKey === p.key && !used.has(e.id));
@@ -871,12 +1003,13 @@ export function intervalCriteria(state: AppState): { tempoRpe: boolean | null; r
 
 /* ------------------------------------------------------- refeição do momento */
 
-export function currentMealIndex(meals: Meal[], nowMin: number): { index: number; phase: 'antes' | 'agora' | 'encerrado' } {
-  if (!meals.length) return { index: 0, phase: 'antes' };
-  const starts = meals.map((m) => minutesOf(m.time) - 45);
-  const close = Math.max(minutesOf('21:00'), minutesOf(meals[meals.length - 1].time) + 60);
+/** Refeição do momento, pelos horários do dia (já ajustados). */
+export function currentMealIndex(times: string[], nowMin: number): { index: number; phase: 'antes' | 'agora' | 'encerrado' } {
+  if (!times.length) return { index: 0, phase: 'antes' };
+  const starts = times.map((t) => minutesOf(t) - 45);
+  const close = Math.max(minutesOf('21:00'), minutesOf(times[times.length - 1]) + 60);
   if (nowMin < starts[0]) return { index: 0, phase: 'antes' };
-  if (nowMin >= close) return { index: meals.length - 1, phase: 'encerrado' };
+  if (nowMin >= close) return { index: times.length - 1, phase: 'encerrado' };
   let idx = 0;
   for (let i = 0; i < starts.length; i++) if (nowMin >= starts[i]) idx = i;
   return { index: idx, phase: 'agora' };

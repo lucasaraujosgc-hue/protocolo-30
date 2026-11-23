@@ -40,6 +40,12 @@ export function minutesOf(hhmm: string): number {
   return h * 60 + m;
 }
 
+/** Minutos do dia → "HH:MM" (limitado ao mesmo dia). */
+export function hhmm(min: number): string {
+  const m = Math.max(0, Math.min(23 * 60 + 59, Math.round(min)));
+  return `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
+}
+
 export function nowMinutes(d = new Date()): number {
   return d.getHours() * 60 + d.getMinutes();
 }

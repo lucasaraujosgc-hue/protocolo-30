@@ -2,12 +2,23 @@ import { Bike, Check, Dumbbell, Minus, Pizza, Plus, Repeat, Scale, Footprints, X
 import { useState } from 'react';
 import { ExerciseSheet } from '../components/ExerciseSheet';
 import { ExtraSheet, MealLogSheet, STATUS_CHIP, STATUS_LABEL } from '../components/MealSheets';
+import { MealItems } from '../components/MealItems';
 import { MeasureSheet, RANGES } from '../components/MeasureSheet';
 import { Delta, MacroBars, MacroChips, NumberField, Ring } from '../components/ui';
-import { fmtFull, fmtShort, nowHHMM } from '../lib/dates';
-import { compensationToday, currentMealIndex, currentWeight, dayCuts, kcalPerStep, makeMealLog, uid, type SessionEval } from '../lib/engine';
+import { fmtFull, fmtShort, minutesOf, nowHHMM } from '../lib/dates';
+import {
+  compensationToday,
+  currentMealIndex,
+  currentWeight,
+  dayCuts,
+  defaultMealTime,
+  kcalPerStep,
+  makeMealLog,
+  SHIFT_MIN,
+  uid,
+  type SessionEval,
+} from '../lib/engine';
 import { fmt1, fmtInt } from '../lib/format';
-import { itemLabel, itemTotals } from '../lib/plan';
 import { useStore } from '../lib/store';
 import type { ExerciseLog, MealStatus, Protocol } from '../lib/types';
 import type { TabId } from '../App';
@@ -19,7 +30,7 @@ export function Home({ go }: { go: (t: TabId) => void }) {
   const meals = plan.meals;
   const comp = compensationToday(state, today, bank.projected);
   const cuts = dayCuts(ev, comp);
-  const { index, phase } = currentMealIndex(meals, nowMin);
+  const { index, phase } = currentMealIndex(ev.meals.map((m) => m.time), nowMin);
   const meal = meals[index];
   const me = ev.meals[index];
   const [sheet, setSheet] = useState<
@@ -45,11 +56,25 @@ export function Home({ go }: { go: (t: TabId) => void }) {
   const quickPlanned = async (i: number) => {
     const m = meals[i];
     const withCuts = cuts.steps.some((c) => c.meal === m.id);
+    const time = defaultMealTime(ev.meals[i], true, nowMin);
     const ok = await saveDay(today, (d) => {
-      d.meals[m.id] = makeMealLog(plan, m, 'planned', { cuts: cuts.steps });
+      d.meals[m.id] = makeMealLog(plan, m, 'planned', { cuts: cuts.steps, time });
     });
-    if (ok) toast(`${m.short} registrado conforme o plano${withCuts ? ' de hoje (com cortes)' : ''}`);
+    if (!ok) return;
+    const shift = minutesOf(time) - minutesOf(m.time);
+    toast(
+      Math.abs(shift) >= SHIFT_MIN && i < meals.length - 1
+        ? `${m.short} às ${time}: próximas refeições ${shift > 0 ? 'mais tarde' : 'mais cedo'}`
+        : `${m.short} registrado conforme o plano${withCuts ? ' de hoje (com cortes)' : ''}`,
+    );
   };
+
+  /** Desfaz o ajuste de horário: marca que a refeição foi comida no horário do cardápio. */
+  const onSchedule = (i: number) =>
+    saveDay(today, (d) => {
+      const log = d.meals[meals[i].id];
+      if (log) log.time = meals[i].time;
+    });
 
   const saveSteps = async () => {
     if (stepsInput === undefined) return;
@@ -133,7 +158,8 @@ export function Home({ go }: { go: (t: TabId) => void }) {
       <div className="card glow">
         <div className="row between">
           <span className="label">
-            {phase === 'antes' ? 'Próxima refeição' : phase === 'encerrado' ? 'Última refeição do dia' : 'Refeição atual'} · {meal.time}
+            {phase === 'antes' ? 'Próxima refeição' : phase === 'encerrado' ? 'Última refeição do dia' : 'Refeição atual'} · {me.time}
+            {!me.log && me.shift !== 0 ? ` (era ${meal.time})` : ''}
           </span>
           {me.log && <span className={`chip ${STATUS_CHIP[me.log.status]}`}>{STATUS_LABEL[me.log.status]}</span>}
         </div>
@@ -141,27 +167,16 @@ export function Home({ go }: { go: (t: TabId) => void }) {
           <div style={{ fontSize: 20, fontWeight: 700 }}>{meal.name}</div>
           <div className="tiny muted">{meal.hint}</div>
         </div>
-        <div className="meal-items">
-          {meal.items.map((it, i) => {
-            const cut = cuts.steps.find((r) => r.meal === meal.id && r.food === it.food);
-            const kcal = itemTotals(plan, it).kcal;
-            return (
-              <div key={i} className="meal-item">
-                <span>
-                  {itemLabel(plan, it)}
-                  {cut && (
-                    <div className="tiny warn-text">
-                      Hoje: {cut.toG} g ({cuts.compFood > 0 ? 'compensação' : 'meta do dia'})
-                    </div>
-                  )}
-                </span>
-                <span className="num muted">{it.grams ? `${it.grams} g` : ''}</span>
-                <span className="num">{kcal > 0 ? fmtInt(kcal) : ''}</span>
-              </div>
-            );
-          })}
-        </div>
+        <MealItems plan={plan} meal={meal} cuts={cuts.steps} log={me.log} cutLabel={`Hoje (${cuts.compFood > 0 ? 'compensação' : 'meta do dia'})`} />
         <MacroChips t={me.actual} />
+        {me.log?.time && Math.abs(me.shift) >= SHIFT_MIN && index < meals.length - 1 && (
+          <div className="hint" style={{ marginTop: 12 }}>
+            Registrado às {me.log.time}, {Math.abs(me.shift)} min {me.shift > 0 ? 'depois' : 'antes'} do previsto: as próximas refeições foram ajustadas.{' '}
+            <button className="cyan" style={{ textDecoration: 'underline' }} onClick={() => onSchedule(index)}>
+              Comi às {meal.time}
+            </button>
+          </div>
+        )}
         <div className="actions" style={{ marginTop: 14 }}>
           <button className="action ok" onClick={() => quickPlanned(index)}>
             <Check size={20} />
@@ -185,7 +200,9 @@ export function Home({ go }: { go: (t: TabId) => void }) {
         {phase === 'agora' && meals[index + 1] && (
           <div className="row between small" style={{ marginTop: 12 }}>
             <span className="muted">
-              Depois: <b style={{ color: 'var(--text)' }}>{meals[index + 1].name}</b> às {meals[index + 1].time}
+              Depois: <b style={{ color: 'var(--text)' }}>{meals[index + 1].name}</b> às {ev.meals[index + 1].time}
+              {ev.meals[index + 1].shift !== 0 && !ev.meals[index + 1].log ? ` (era ${meals[index + 1].time})` : ''}
+              {ev.meals[index + 1].tight && <span className="warn-text"> · perto da anterior: versão leve</span>}
             </span>
             <button className="btn sm ghost" onClick={() => go('plano')}>
               Ver dia <ArrowRight size={14} />
@@ -326,6 +343,7 @@ export function Home({ go }: { go: (t: TabId) => void }) {
           plan={plan}
           meal={meals[sheet.mealIndex]}
           log={ev.meals[sheet.mealIndex].log}
+          scheduled={ev.meals[sheet.mealIndex].time}
           initial={sheet.status}
           cuts={cuts.steps}
           onClose={() => setSheet(null)}

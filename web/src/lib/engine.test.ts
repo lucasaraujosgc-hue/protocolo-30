@@ -7,6 +7,7 @@ import {
   composition,
   currentMealIndex,
   dayCuts,
+  defaultMealTime,
   emptyDay,
   evalDay,
   exerciseTargets,
@@ -15,13 +16,14 @@ import {
   makeMealLog,
   navyBf,
   planCompensation,
+  plateOf,
   review,
   rfm,
 } from './engine';
-import { PRESET_BY_ID, presetItem } from './foods';
-import { planOf, reductionPlan } from './plan';
+import { FOOD_BY_ID, PRESET_BY_ID, presetItem } from './foods';
+import { mealTotals, planOf, reductionPlan } from './plan';
 import { defaultProtocol, upsertVersion } from './protocol';
-import { defaultTraining, plannedSessions, scheduleWarnings } from './schedule';
+import { blocksMinutes, defaultTraining, plannedSessions, scheduleWarnings } from './schedule';
 import type { AppState, DayLog, Measurement, Protocol } from './types';
 
 const START = '2026-11-23';
@@ -323,8 +325,99 @@ describe('revisão do dia 14', () => {
 
 describe('refeição atual', () => {
   it('escolhe a refeição pela hora', () => {
-    expect(currentMealIndex(PLAN.meals, 5 * 60)).toEqual({ index: 0, phase: 'antes' });
-    expect(currentMealIndex(PLAN.meals, 9 * 60 + 20).index).toBe(1);
-    expect(currentMealIndex(PLAN.meals, 21 * 60 + 30).phase).toBe('encerrado');
+    expect(currentMealIndex(PLAN.meals.map((m) => m.time), 5 * 60)).toEqual({ index: 0, phase: 'antes' });
+    expect(currentMealIndex(PLAN.meals.map((m) => m.time), 9 * 60 + 20).index).toBe(1);
+    expect(currentMealIndex(PLAN.meals.map((m) => m.time), 21 * 60 + 30).phase).toBe('encerrado');
+  });
+});
+
+describe('quantidades por item', () => {
+  const almoco = MEAL.almoco;
+  const feijaoIdx = almoco.items.findIndex((it) => it.food === 'feijao');
+  const arrozIdx = almoco.items.findIndex((it) => it.food === 'arroz');
+  const kcalOf = (food: string, grams: number) => (FOOD_BY_ID[food].per100.kcal * grams) / 100;
+
+  it('almoço sem feijão tira só o feijão', () => {
+    const log = makeMealLog(PLAN, almoco, 'less', { portions: [{ i: feijaoIdx, food: 'feijao', grams: 0 }] });
+    expect(log.kcal).toBeCloseTo(mealTotals(PLAN, almoco).kcal - kcalOf('feijao', 100), 0);
+    expect(log.portions).toEqual([{ i: feijaoIdx, food: 'feijao', grams: 0 }]);
+  });
+
+  it('a mais: mais arroz e um copo de refrigerante', () => {
+    const refri = presetItem(PRESET_BY_ID.refri_copo, 1);
+    const log = makeMealLog(PLAN, almoco, 'more', { portions: [{ i: arrozIdx, food: 'arroz', grams: 180 }], items: [refri] });
+    expect(log.kcal).toBeCloseTo(mealTotals(PLAN, almoco).kcal + kcalOf('arroz', 60) + 106, 0);
+    expect(log.items?.[0].name).toContain('Refrigerante');
+  });
+
+  it('quantidade registrada vale sobre o corte do dia; item que mudou de lugar é ignorado', () => {
+    const cuts = reductionPlan(PLAN, 400).steps;
+    const plate = plateOf(almoco, cuts, [{ i: arrozIdx, food: 'arroz', grams: 120 }]);
+    expect(plate.items[arrozIdx].grams).toBe(120);
+    const moved = plateOf(almoco, [], [{ i: arrozIdx, food: 'batata', grams: 999 }]);
+    expect(moved.items[arrozIdx].grams).toBe(120);
+  });
+
+  it('item com calorias próprias usa fração da porção', () => {
+    const meal = { ...almoco, items: [{ label: 'Marmita', kcal: 600, p: 40, c: 60, f: 20 }] };
+    const log = makeMealLog(PLAN, meal, 'less', { portions: [{ i: 0, mult: 0.5 }] });
+    expect(log.kcal).toBe(300);
+    expect(log.p).toBe(20);
+  });
+});
+
+describe('horários do dia', () => {
+  // START (23/11) é segunda: musculação às 17:00, sem spinning.
+  const MONDAY = START;
+  const SUNDAY = '2026-11-29';
+  const timesOf = (s: AppState, date: string) => evalDay(s, date, { today: date, nowMin: 12 * 60 }).meals.map((m) => m.time);
+  const ate = (date: string, meal: string, time: string) => (s: AppState) =>
+    withDay(s, date, (d) => {
+      d.meals[meal] = makeMealLog(PLAN, MEAL[meal], 'planned', { time });
+    });
+
+  it('sem registro, vale o cardápio', () => {
+    expect(timesOf(baseState(), MONDAY)).toEqual(['06:15', '10:00', '13:00', '16:00', '18:45']);
+  });
+
+  it('café atrasado empurra as próximas, mas o pré-treino respeita o treino e o jantar fica', () => {
+    const s = ate(MONDAY, 'cafe', '06:57')(baseState());
+    expect(timesOf(s, MONDAY)).toEqual(['06:57', '10:40', '13:40', '16:30', '18:45']);
+  });
+
+  it('almoço adiantado antecipa o pré-treino', () => {
+    const s = ate(MONDAY, 'almoco', '12:00')(baseState());
+    expect(timesOf(s, MONDAY)).toEqual(['06:15', '10:00', '12:00', '15:00', '18:45']);
+  });
+
+  it('almoço muito tarde: pré-treino fica preso ao treino e avisa que está perto', () => {
+    const s = ate(MONDAY, 'almoco', '15:45')(baseState());
+    const ev = evalDay(s, MONDAY, { today: MONDAY, nowMin: 16 * 60 });
+    expect(ev.meals.map((m) => m.time)).toEqual(['06:15', '10:00', '15:45', '16:30', '18:45']);
+    expect(ev.meals[3].tight).toBe(true);
+    expect(ev.meals[3].passed).toBe(false);
+  });
+
+  it('domingo sem treino: atraso passa para todas, até o limite das 20:30', () => {
+    expect(timesOf(ate(SUNDAY, 'almoco', '14:00')(baseState()), SUNDAY)).toEqual(['06:15', '10:00', '14:00', '17:00', '19:45']);
+    expect(timesOf(ate(SUNDAY, 'almoco', '15:00')(baseState()), SUNDAY)).toEqual(['06:15', '10:00', '15:00', '18:00', '20:30']);
+  });
+
+  it('diferença pequena (menos de 15 min) não mexe nos horários', () => {
+    expect(timesOf(ate(MONDAY, 'cafe', '06:25')(baseState()), MONDAY)).toEqual(['06:25', '10:00', '13:00', '16:00', '18:45']);
+  });
+
+  it('horário sugerido: agora, se perto do previsto; senão, o previsto', () => {
+    const me = { time: '13:00', log: undefined };
+    expect(defaultMealTime(me, true, 14 * 60)).toBe('14:00');
+    expect(defaultMealTime(me, true, 15 * 60)).toBe('13:00');
+    expect(defaultMealTime(me, false, 14 * 60)).toBe('13:00');
+  });
+
+  it('lê a duração das sessões pelos blocos', () => {
+    const t = defaultTraining();
+    expect(blocksMinutes(t.sessions.z2.blocks)).toBe(30);
+    expect(blocksMinutes(t.sessions.tempo.blocks)).toBe(30);
+    expect(blocksMinutes(t.sessions.intervalado.blocks)).toBe(30);
   });
 });

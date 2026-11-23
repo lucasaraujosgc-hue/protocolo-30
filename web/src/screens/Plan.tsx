@@ -1,10 +1,11 @@
 import { Check, ChevronDown, Pencil, Pizza, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { MealItems } from '../components/MealItems';
 import { ExtraSheet, MealLogSheet, STATUS_CHIP, STATUS_LABEL } from '../components/MealSheets';
 import { DateNav, Delta, MacroChips } from '../components/ui';
-import { compensationToday, dayCuts, evalDay, makeMealLog, mealWithCuts, type MealEval } from '../lib/engine';
+import { compensationToday, dayCuts, defaultMealTime, evalDay, makeMealLog, SHIFT_MIN, type MealEval } from '../lib/engine';
 import { fmt1, fmtInt } from '../lib/format';
-import { itemLabel, itemTotals, type Plan as PlanT, type ReductionStep } from '../lib/plan';
+import type { Plan as PlanT, ReductionStep } from '../lib/plan';
 import { useStore } from '../lib/store';
 
 export function Plan() {
@@ -128,10 +129,11 @@ export function Plan() {
           onToggle={() => setOpen(open === me.meal.id ? null : me.meal.id)}
           onLog={() => setSheet({ t: 'meal', i })}
           onQuick={async () => {
+            const time = defaultMealTime(me, date === today, nowMin);
             const ok = await saveDay(date, (d) => {
-              d.meals[me.meal.id] = makeMealLog(ev.plan, me.meal, 'planned', { cuts: cuts.steps });
+              d.meals[me.meal.id] = makeMealLog(ev.plan, me.meal, 'planned', { cuts: cuts.steps, time });
             });
-            if (ok) toast(`${me.meal.short} conforme o plano`);
+            if (ok) toast(`${me.meal.short} conforme o plano, às ${time}`);
           }}
         />
       ))}
@@ -242,7 +244,15 @@ export function Plan() {
       </details>
 
       {sheet?.t === 'meal' && (
-        <MealLogSheet date={date} plan={ev.plan} meal={ev.meals[sheet.i].meal} log={ev.meals[sheet.i].log} cuts={cuts.steps} onClose={() => setSheet(null)} />
+        <MealLogSheet
+          date={date}
+          plan={ev.plan}
+          meal={ev.meals[sheet.i].meal}
+          log={ev.meals[sheet.i].log}
+          scheduled={ev.meals[sheet.i].time}
+          cuts={cuts.steps}
+          onClose={() => setSheet(null)}
+        />
       )}
       {sheet?.t === 'extra' && <ExtraSheet date={date} onClose={() => setSheet(null)} />}
     </div>
@@ -267,13 +277,17 @@ function MealCard({
   onQuick: () => void;
 }) {
   const status = me.log?.status;
-  const plate = mealWithCuts(me.meal, cuts);
+  const shifted = me.shift !== 0 && (!me.log || Math.abs(me.shift) >= SHIFT_MIN);
   return (
     <div className={`card ${status && status !== 'planned' ? (status === 'more' ? 'warn' : '') : ''}`}>
       <button className="row between" style={{ width: '100%', textAlign: 'left' }} onClick={onToggle}>
         <div>
-          <div className="tiny muted num">{me.meal.time}</div>
+          <div className="tiny muted num">
+            {me.time}
+            {shifted && <span className="dim"> · {me.log?.time ? `previsto ${me.meal.time}` : `era ${me.meal.time}`}</span>}
+          </div>
           <div style={{ fontWeight: 700, fontSize: 16 }}>{me.meal.name}</div>
+          {me.tight && <div className="tiny warn-text">Perto da refeição anterior: faça uma versão leve ou junte com ela.</div>}
         </div>
         <div className="row" style={{ gap: 8 }}>
           {status ? (
@@ -287,28 +301,7 @@ function MealCard({
       </button>
       {open && (
         <>
-          <div className="meal-items">
-            {me.meal.items.map((it, i) => {
-              const kcal = itemTotals(plan, it).kcal;
-              const today = plate.items[i];
-              return (
-                <div key={i} className="meal-item">
-                  <span>
-                    {itemLabel(plan, it)}
-                    {today.grams !== it.grams && <div className="tiny warn-text">Com corte: {today.grams} g</div>}
-                  </span>
-                  <span className="num muted">{it.grams ? `${it.grams} g` : ''}</span>
-                  <span className="num">{kcal > 0 ? fmtInt(kcal) : ''}</span>
-                </div>
-              );
-            })}
-          </div>
-          {me.log?.items?.length ? (
-            <div className="hint" style={{ marginBottom: 10 }}>
-              {status === 'swapped' ? 'Comeu no lugar: ' : 'A mais: '}
-              {me.log.items.map((x) => `${x.name} (${fmtInt(x.kcal)} kcal)`).join(', ')}
-            </div>
-          ) : null}
+          <MealItems plan={plan} meal={me.meal} cuts={cuts} log={me.log} />
           {me.log?.note && <div className="tiny muted" style={{ marginBottom: 8 }}>“{me.log.note}”</div>}
           <MacroChips t={me.actual} />
           <div className="row" style={{ marginTop: 12 }}>

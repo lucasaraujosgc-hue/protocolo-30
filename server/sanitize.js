@@ -61,6 +61,23 @@ function items(list) {
   );
 }
 
+function portions(list) {
+  if (!Array.isArray(list)) return undefined;
+  const out = list
+    .filter((x) => x && Number.isInteger(x.i) && x.i >= 0 && x.i < 30)
+    .slice(0, 30)
+    .map((x) =>
+      clean({
+        i: x.i,
+        food: typeof x.food === 'string' && FOOD_ID_RE.test(x.food) ? x.food : undefined,
+        grams: num(x.grams, 0, 5000),
+        mult: num(x.mult, 0, 10),
+      }),
+    )
+    .filter((x) => x.grams !== undefined || x.mult !== undefined);
+  return out.length ? out : undefined;
+}
+
 function mealLog(m) {
   const status = oneOf(m?.status, MEAL_STATUS);
   if (!status) throw new ValidationError('status de refeição inválido');
@@ -71,7 +88,9 @@ function mealLog(m) {
     c: num(m.c, 0, 2000) ?? 0,
     f: num(m.f, 0, 2000) ?? 0,
     items: items(m.items),
+    portions: portions(m.portions),
     fraction: num(m.fraction, 0, 1),
+    time: isTime(m.time) ? m.time : undefined,
     note: str(m.note, 300),
     at: str(m.at, 40) ?? new Date().toISOString(),
   });
